@@ -311,10 +311,40 @@ const CUSTODIAN_GEMS_PER_STRIKE = 50;
 // designer's own play (playtest note: "healed one of the enemies").
 const ARCHMAGE_BENEFICIAL_MISFIRE_CHANCE = 0.3;
 
-const SHAPE_MULT = { line3: 1, line4: 2, line5: 3, L: 3, T: 4, cross: 5 };
-const RANK = ["line3", "line4", "line5", "L", "T", "cross"];
-const MAKES_SPECIAL = new Set(["line4", "line5", "L", "T", "cross"]);
-const MARK = { line4: "4", line5: "5", L: "L", T: "T", cross: "+" };
+// L/T/cross used to ignore how long the two runs actually were -- a bare
+// 3+3 T and a monstrous 5+5 T both just classified as "T" and detonated for
+// the same fixed value. Every intersection shape now comes in three size
+// tiers, named by whichever of its two arms is SHORTER (bottlenecked by the
+// weaker arm). lesser_* keeps the old flat value; greater/grand step up
+// hard on purpose -- a grand_cross (two 5-runs crossing at both middles) is
+// meant to be "essentially the hardest thing to chain together."
+const SIZE_TIERS = ["lesser", "greater", "grand"];
+const sizeTier = len => (len >= 5 ? "grand" : len === 4 ? "greater" : "lesser");
+const isCross = shape => shape.endsWith("_cross");
+// Strip the size tier so gear can still bind a trigger to plain L/T/cross
+// regardless of which tier fired -- size changes payout, never what gear does.
+const baseShape = shape =>
+  (shape === "line3" || shape === "line4" || shape === "line5") ? shape : shape.split("_")[1];
+
+const SHAPE_MULT = {
+  line3: 1, line4: 2, line5: 3,
+  lesser_L: 3, greater_L: 5, grand_L: 8,
+  lesser_T: 4, greater_T: 7, grand_T: 12,
+  lesser_cross: 5, greater_cross: 9, grand_cross: 16,
+};
+const RANK = [
+  "line3", "line4", "line5",
+  "lesser_L", "greater_L", "grand_L",
+  "lesser_T", "greater_T", "grand_T",
+  "lesser_cross", "greater_cross", "grand_cross",
+];
+const MAKES_SPECIAL = new Set(RANK.filter(s => s !== "line3"));
+const MARK = {
+  line4: "4", line5: "5",
+  lesser_L: "L", greater_L: "L²", grand_L: "L³",
+  lesser_T: "T", greater_T: "T²", grand_T: "T³",
+  lesser_cross: "+", greater_cross: "+²", grand_cross: "+³",
+};
 /* One glyph per effect, drawn on every gem bound to it. Colour tells you
    which pillar, glyph tells you what it currently does -- and the glyph is
    what stays meaningful when a different loadout rebinds the colour. */
@@ -351,9 +381,15 @@ const TRIGGER_DESC = {
 const BLAST_DESC = {
   line4: "clears its row",
   line5: "blasts 3x3",
-  L: "clears its column",
-  T: "clears row AND column",
-  cross: "destroys every gem of its colour",
+  lesser_L: "clears its column",
+  greater_L: "clears 3 columns",
+  grand_L: "clears 5 columns",
+  lesser_T: "clears row AND column",
+  greater_T: "clears 3 rows AND 3 columns",
+  grand_T: "clears 5 rows AND 5 columns",
+  lesser_cross: "destroys every gem of its colour",
+  greater_cross: "destroys every gem of its colour",
+  grand_cross: "destroys every gem of its colour",
 };
 
 const SPELLS = {
@@ -574,13 +610,17 @@ function classify(runs) {
     const longest = Math.max(...runs.map(r => r.b - r.a + 1));
     return longest >= 5 ? "line5" : longest === 4 ? "line4" : "line3";
   }
-  let best = "L";
+  let best = null;
   for (const h of hs) for (const v of vs) {
     if (h.a <= v.fixed && v.fixed <= h.b && v.a <= h.fixed && h.fixed <= v.b) {
       const hMid = v.fixed !== h.a && v.fixed !== h.b;
       const vMid = h.fixed !== v.a && h.fixed !== v.b;
-      const s = hMid && vMid ? "cross" : hMid || vMid ? "T" : "L";
-      if (RANK.indexOf(s) > RANK.indexOf(best)) best = s;
+      const base = hMid && vMid ? "cross" : hMid || vMid ? "T" : "L";
+      // Bottlenecked by whichever arm is shorter -- a 5-run T'd into a bare
+      // 3-run is still only a "lesser" T.
+      const hLen = h.b - h.a + 1, vLen = v.b - v.a + 1;
+      const s = `${sizeTier(Math.min(hLen, vLen))}_${base}`;
+      if (best === null || RANK.indexOf(s) > RANK.indexOf(best)) best = s;
     }
   }
   return best;
@@ -794,9 +834,17 @@ function blastCells(shape, r, c) {
   const push = (y, x) => { if (y >= 0 && y < SIZE && x >= 0 && x < SIZE) hit.push([y, x]); };
   if (shape === "line4") for (let x = 0; x < SIZE; x++) push(r, x);
   else if (shape === "line5") { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) push(r + dy, c + dx); }
-  else if (shape === "L") for (let y = 0; y < SIZE; y++) push(y, c);
-  else if (shape === "T") { for (let x = 0; x < SIZE; x++) push(r, x); for (let y = 0; y < SIZE; y++) push(y, c); }
-  else if (shape === "cross") {
+  else if (shape.endsWith("_L")) {
+    const width = SIZE_TIERS.indexOf(shape.split("_")[0]);
+    for (let dc = -width; dc <= width; dc++) if (c + dc >= 0 && c + dc < SIZE)
+      for (let y = 0; y < SIZE; y++) push(y, c + dc);
+  } else if (shape.endsWith("_T")) {
+    const width = SIZE_TIERS.indexOf(shape.split("_")[0]);
+    for (let d = -width; d <= width; d++) {
+      if (r + d >= 0 && r + d < SIZE) for (let x = 0; x < SIZE; x++) push(r + d, x);
+      if (c + d >= 0 && c + d < SIZE) for (let y = 0; y < SIZE; y++) push(y, c + d);
+    }
+  } else if (isCross(shape)) {
     const hue = board[r][c];
     for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) if (board[y][x] === hue) push(y, x);
   }
@@ -814,7 +862,7 @@ function detonateAll(fuse) {
     const tag = `${shape} SPECIAL`;
     const effect = loadout.colors[color];
     if (effect) applyEffect(effect, value, tag);
-    const trig = loadout.shapes[shape];
+    const trig = loadout.shapes[baseShape(shape)];
     if (trig) fireTrigger(trig, value, tag);
 
     const fresh = blastCells(shape, r, c).filter(([y, x]) => !blasted.has(key(y, x)));
@@ -839,9 +887,16 @@ function comboBlast(shape, r1, c1, r2, c2) {
   const all = [];
   for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) all.push([y, x]);
   if (shape === "line4") return [all.filter(p => Math.abs(p[0] - r) <= 1), "three whole rows"];
-  if (shape === "L") return [all.filter(p => Math.abs(p[1] - c) <= 1), "three whole columns"];
   if (shape === "line5") return [all.filter(p => Math.abs(p[0] - r) <= 2 && Math.abs(p[1] - c) <= 2), "a 5x5 crater"];
-  if (shape === "T") return [all.filter(p => Math.abs(p[0] - r) <= 1 || Math.abs(p[1] - c) <= 1), "three rows AND three columns"];
+  if (shape.endsWith("_L")) {
+    const width = SIZE_TIERS.indexOf(shape.split("_")[0]) + 1;
+    return [all.filter(p => Math.abs(p[1] - c) <= width), `${width * 2 + 1} whole columns`];
+  }
+  if (shape.endsWith("_T")) {
+    const width = SIZE_TIERS.indexOf(shape.split("_")[0]) + 1;
+    const n = width * 2 + 1;
+    return [all.filter(p => Math.abs(p[0] - r) <= width || Math.abs(p[1] - c) <= width), `${n} rows AND ${n} columns`];
+  }
   return [blastCells(shape, r, c), "a doubled blast"];
 }
 
@@ -852,7 +907,7 @@ function comboDetonate(shape, colours, cells) {
     const eff = loadout.colors[col];
     if (eff) applyEffect(eff, value, tag);
   }
-  const trig = loadout.shapes[shape];
+  const trig = loadout.shapes[baseShape(shape)];
   if (trig) { fireTrigger(trig, value, tag); fireTrigger(trig, value, tag); }
 
   const chained = [], caught = {};
@@ -880,14 +935,17 @@ function doFuse(r1, c1, r2, c2) {
   if (a === b) stats.combos++;
   let blasted;
 
-  if (a === "cross" && b === "cross") {
+  if (isCross(a) && isCross(b)) {
     log("!! FUSION: cross + cross -- THE ENTIRE BOARD GOES", "combo");
     const cells = [];
     for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) cells.push([y, x]);
-    blasted = comboDetonate("cross", new Set(COLORS), cells);
-  } else if (a === "cross" || b === "cross") {
-    const other = a === "cross" ? b : a;
-    const pos = a === "cross" ? [r2, c2] : [r1, c1];
+    // Uses the higher of the two tiers -- fusing should never be worse
+    // than either half.
+    const bestCross = RANK.indexOf(a) >= RANK.indexOf(b) ? a : b;
+    blasted = comboDetonate(bestCross, new Set(COLORS), cells);
+  } else if (isCross(a) || isCross(b)) {
+    const other = isCross(a) ? b : a;
+    const pos = isCross(a) ? [r2, c2] : [r1, c1];
     const hue = board[pos[0]][pos[1]];
     const seeded = [];
     for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++)
@@ -1159,9 +1217,15 @@ const SHAPE_HOW = {
   line3: "three in a row",
   line4: "four in a row",
   line5: "five in a row",
-  L: "two lines meeting at their ends",
-  T: "a line ending in the middle of another",
-  cross: "two lines crossing at both middles",
+  lesser_L: "two 3-runs meeting at their ends",
+  greater_L: "two 4-runs meeting at their ends",
+  grand_L: "two 5-runs meeting at their ends",
+  lesser_T: "a run ending in the middle of another, bottlenecked at 3",
+  greater_T: "a run ending in the middle of another, bottlenecked at 4",
+  grand_T: "a run ending in the middle of another, both runs 5+",
+  lesser_cross: "two runs crossing at both middles, bottlenecked at 3",
+  greater_cross: "two runs crossing at both middles, bottlenecked at 4",
+  grand_cross: "two runs crossing at both middles, both runs 5+ -- the hardest shape in the game",
 };
 
 function showReference() {
@@ -1173,7 +1237,7 @@ function showReference() {
   }).join("");
 
   const shapeRows = RANK.map(s => {
-    const trig = loadout.shapes[s];
+    const trig = loadout.shapes[baseShape(s)];
     const leaves = MAKES_SPECIAL.has(s)
       ? `leaves <b>${MARK[s]}</b> — ${BLAST_DESC[s]}`
       : `<span class="none">no special</span>`;
@@ -1181,7 +1245,7 @@ function showReference() {
       ? `<span class="yours">${trig.replace(/_/g, " ")}</span><br><span class="none">${TRIGGER_DESC[trig]}</span>`
       : `<span class="none">—</span>`;
     return `<tr><td class="m">${MARK[s] || "3"}</td>
-      <td><b>${s}</b><br><span class="none">${SHAPE_HOW[s]}</span></td>
+      <td><b>${s.replace(/_/g, " ")}</b><br><span class="none">${SHAPE_HOW[s]}</span></td>
       <td>x${SHAPE_MULT[s]}<br>${leaves}</td>
       <td>${yours}</td></tr>`;
   }).join("");
@@ -1441,14 +1505,14 @@ function previewSwap(r1, c1, r2, c2) {
         icon: EFFECT_ICON.wild_charge,
         value: m.cells.length,
         leaves: MAKES_SPECIAL.has(m.shape) ? MARK[m.shape] : null,
-        trigger: loadout.shapes[m.shape] || null,
+        trigger: loadout.shapes[baseShape(m.shape)] || null,
       };
     }
     return {
       icon: EFFECT_ICON[effect] || "?",
       value: shownValue(effect, m.cells.length * PER_GEM),
       leaves: MAKES_SPECIAL.has(m.shape) ? MARK[m.shape] : null,
-      trigger: loadout.shapes[m.shape] || null,
+      trigger: loadout.shapes[baseShape(m.shape)] || null,
     };
   });
   swapCells(r1, c1, r2, c2);
