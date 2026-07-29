@@ -39,6 +39,14 @@
   .card h3 { margin: 0 0 4px; font-size: 16px; }
   .card p { margin: 0 0 10px; color: var(--dim); font-size: 13px; }
   .intro { color: var(--dim); font-size: 13.5px; max-width: 780px; margin: 0 0 20px; }
+  .tutorial {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 18px 16px; margin-bottom: 22px; max-width: 780px;
+  }
+  .tutorial ol { margin: 0; padding-left: 20px; font-size: 13.5px; line-height: 1.6; }
+  .tutorial li { margin-bottom: 6px; }
+  .tutorial li:last-child { margin-bottom: 0; }
+  .tutorial b { color: var(--text); }
   .section-h { margin: 22px 0 8px; font-size: 13px; text-transform: uppercase;
     letter-spacing: .6px; color: var(--dim); }
   .cards.sets { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
@@ -186,13 +194,25 @@
     <h1>Match-3 Combat Prototype</h1>
     <div class="sub">Same four colours, three completely different games. Pick one.</div>
     <p class="intro">
-      You're a blacksmith's heir clearing a dungeon, one fight at a time. Pick a
-      <b>class</b> below — it decides what each gem colour does when you match it (damage,
-      blocking, healing, casting...). Every fight is a match-3 board: swap gems to trigger your
-      colours, and chain bigger shapes (four-in-a-rows, L's, T's, crosses) for bigger payoffs.
-      Optionally bolt on a <b>tier piece</b> too — it bends your class's rules further. Five
-      fights, health carries between them, no healing in between — see how far you get.
+      You're a blacksmith's heir clearing a dungeon, one fight at a time, using nothing but
+      what your gear lets a match do. Quick rundown below, or just dive in.
     </p>
+
+    <div class="tutorial">
+      <h3 class="section-h" style="margin-top:0">How to play</h3>
+      <ol>
+        <li><b>Swap</b> two adjacent gems (drag or click-click). No match? It snaps back — free, no swipe lost.</li>
+        <li><b>Match 3+ of a colour</b> to trigger whatever that colour does — the icon on each gem shows you
+          (e.g. ✖ damage, ▣ block, ♥ heal, ◆ mana).</li>
+        <li><b>Match 4 or more</b> (a line, an L, a T, or a cross) and it <i>doesn't</i> pay out right away —
+          it leaves a <b>special gem</b> instead. Match that again later for a much bigger blast.</li>
+        <li><b>Fuse two specials</b> by swiping them into each other — always works, no colour needed, and hits harder still.</li>
+        <li><b>Enemies telegraph</b>: their next move and its timing are shown ahead of time. Your 3 swipes a
+          turn are for setting up against it, not just reacting.</li>
+        <li>Five fights back to back, <b>no healing between them</b> — health carries over. See how far you get.</li>
+      </ol>
+      <p class="hint" style="margin:10px 0 0">Once you're in, the <b>Reference</b> button explains your exact class + tier piece combo in full.</p>
+    </div>
 
     <h3 class="section-h">1. Choose a class</h3>
     <div class="cards" id="classCards"></div>
@@ -203,11 +223,6 @@
     <div class="hint" id="setupPreview"></div>
 
     <button class="beginbtn" id="beginBtn" disabled>Choose a class to begin</button>
-
-    <div class="hint">
-      Drag a gem into its neighbour to swap. A swap that makes no match snaps back and costs nothing.
-      Three committed swipes per turn. Health carries between fights; mana resets.
-    </div>
   </div>
 
   <!-- ============ game ============ -->
