@@ -63,6 +63,13 @@
     font-weight: 700; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px;
   }
   .socket-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .advanced-toggle {
+    display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+    font-size: 13.5px; color: var(--dim); margin: 14px 0 22px; padding: 10px 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  }
+  .advanced-toggle input { width: 16px; height: 16px; cursor: pointer; }
+  .advanced-toggle:hover { border-color: #55607a; color: var(--text); }
   .beginbtn {
     display: block; width: 100%; margin: 18px 0; padding: 12px; font-size: 15px; font-weight: 700;
     background: #3a5fd9; color: #fff; border: none; border-radius: 10px; cursor: pointer;
@@ -225,19 +232,26 @@
       <p class="hint" style="margin:10px 0 0">Once you're in, the <b>Reference</b> button explains your exact class + tier piece combo in full.</p>
     </div>
 
-    <h3 class="section-h">Quick presets (optional -- fills the sockets below, then keep tweaking)</h3>
+    <h3 class="section-h" style="margin-top:0">Pick a build and go</h3>
     <div class="cards" id="presetCards"></div>
 
-    <h3 class="section-h">1. Colour sockets — pick what each colour does</h3>
-    <div id="colourSockets"></div>
+    <label class="advanced-toggle">
+      <input type="checkbox" id="advancedToggle">
+      <span>Advanced: craft a fully custom build, one gem per socket</span>
+    </label>
 
-    <h3 class="section-h">2. Line4 gem — your build's heartbeat trigger</h3>
-    <div class="cards mini" id="gemLine4"></div>
+    <div id="advancedSection" class="hidden">
+      <h3 class="section-h">Colour sockets — pick what each colour does</h3>
+      <div id="colourSockets"></div>
 
-    <h3 class="section-h">3. Hard-shape gem — your rare payoff trigger</h3>
-    <div class="cards mini" id="gemHard"></div>
+      <h3 class="section-h">Line4 gem — your build's heartbeat trigger</h3>
+      <div class="cards mini" id="gemLine4"></div>
 
-    <h3 class="section-h">4. Tier piece (optional)</h3>
+      <h3 class="section-h">Hard-shape gem — your rare payoff trigger</h3>
+      <div class="cards mini" id="gemHard"></div>
+    </div>
+
+    <h3 class="section-h">Tier piece (optional)</h3>
     <div class="cards sets" id="setCards"></div>
 
     <div class="hint" id="setupPreview"></div>
@@ -1853,6 +1867,9 @@ document.querySelectorAll("#presetCards .card").forEach(c => c.onclick = () => {
   picks = Object.assign({}, PRESETS[c.dataset.preset].picks);
   refreshSetupSelection();
 });
+document.getElementById("advancedToggle").onchange = e => {
+  document.getElementById("advancedSection").classList.toggle("hidden", !e.target.checked);
+};
 document.getElementById("beginBtn").onclick = () => {
   if (allSocketsFilled()) begin(picks, pickedSet);
 };
