@@ -53,6 +53,16 @@
   .cards.sets .card { padding: 10px 14px; }
   .cards.sets .card h3 { font-size: 14px; }
   .cards.sets .card p { font-size: 12px; margin-bottom: 0; }
+  .cards.mini { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 4px; }
+  .cards.mini .card { padding: 8px 12px; }
+  .cards.mini .card h3 { font-size: 13px; margin: 0; }
+  .cards.mini .card p { font-size: 11.5px; margin: 3px 0 0; }
+  .socket-row { margin-bottom: 14px; }
+  .socket-row .socket-label {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
+    font-weight: 700; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px;
+  }
+  .socket-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
   .beginbtn {
     display: block; width: 100%; margin: 18px 0; padding: 12px; font-size: 15px; font-weight: 700;
     background: #3a5fd9; color: #fff; border: none; border-radius: 10px; cursor: pointer;
@@ -193,7 +203,7 @@
   <!-- ============ loadout picker ============ -->
   <div id="setup">
     <h1>Match-3 Combat Prototype</h1>
-    <div class="sub">Same four colours, three completely different games. Pick one.</div>
+    <div class="sub">Same four colours -- what each one does is entirely up to what you pick.</div>
     <p class="intro">
       You're a blacksmith's heir clearing a dungeon, one fight at a time, using nothing but
       what your gear lets a match do. Quick rundown below, or just dive in.
@@ -215,15 +225,24 @@
       <p class="hint" style="margin:10px 0 0">Once you're in, the <b>Reference</b> button explains your exact class + tier piece combo in full.</p>
     </div>
 
-    <h3 class="section-h">1. Choose a class</h3>
-    <div class="cards" id="classCards"></div>
+    <h3 class="section-h">Quick presets (optional -- fills the sockets below, then keep tweaking)</h3>
+    <div class="cards" id="presetCards"></div>
 
-    <h3 class="section-h">2. Tier piece (optional)</h3>
+    <h3 class="section-h">1. Colour sockets — pick what each colour does</h3>
+    <div id="colourSockets"></div>
+
+    <h3 class="section-h">2. Line4 gem — your build's heartbeat trigger</h3>
+    <div class="cards mini" id="gemLine4"></div>
+
+    <h3 class="section-h">3. Hard-shape gem — your rare payoff trigger</h3>
+    <div class="cards mini" id="gemHard"></div>
+
+    <h3 class="section-h">4. Tier piece (optional)</h3>
     <div class="cards sets" id="setCards"></div>
 
     <div class="hint" id="setupPreview"></div>
 
-    <button class="beginbtn" id="beginBtn" disabled>Choose a class to begin</button>
+    <button class="beginbtn" id="beginBtn" disabled>Fill every socket to begin</button>
   </div>
 
   <!-- ============ game ============ -->
@@ -398,30 +417,57 @@ const SPELLS = {
   thunder: { cost: 90, label: "Thunder", note: "12 to all" },
 };
 
-// A CLASS defines the base colour/shape bindings and hp -- the character-
-// creation layer. A SET (tier piece, optional) layers on top: it can rebind
-// a colour (colorOverrides -- null removes an effect entirely, e.g.
-// Archmage's blue) and/or add an autonomous mechanic. Shape triggers always
-// come from the class -- kept deliberately origin-free so build-crafting
-// via sets never touches the specials/fusion mechanics.
-const CLASSES = {
+// Full build-crafting: each of the 4 colours is an independent socket, and
+// you pick one gem for it from that colour's fixed pool -- most effects are
+// exclusive to one colour (attack and bleed are red-only, per the designer's
+// own example), but a few (mana) are deliberately allowed in more than one
+// pool so a "red AND blue make mana" build stays possible as an emergent
+// choice instead of a fixed class. Yellow currently only has one real gem
+// (splash) since attack moved to red-exclusive -- a known thin spot, not a
+// bug, flagged for the designer to fill in with a second yellow-only effect.
+const GEM_POOLS = {
+  R: ["attack", "bleed", "mana"],
+  G: ["block", "lifesteal"],
+  Y: ["splash"],
+  B: ["armour", "lifesteal", "mana"],
+};
+
+// Line4 is always the build's frequent "heartbeat" trigger. The hard-shape
+// gem bundles a shape (L/T/cross) together with its trigger as one pick --
+// splitting "which shape" from "what it does" wasn't asked for and would
+// only add combinations nobody requested.
+const LINE4_GEMS = {
+  cleave: "cleave",
+  bleed_burst: "bleed_burst",
+  spell_buff: "spell_buff",
+};
+const HARD_SHAPE_GEMS = {
+  stun_L: { shape: "L", trigger: "stun" },
+  bleed_detonate_T: { shape: "T", trigger: "bleed_detonate" },
+  double_cross: { shape: "cross", trigger: "double_next_spell" },
+};
+
+// HP no longer comes from a class archetype now that colours are picked
+// independently -- flat placeholder until there's a real answer for what
+// (if anything) should scale it. Flagged, not a considered design choice.
+const BASE_HP = 50;
+
+// Quick-start presets -- exactly the old three classes, expressed as sockets,
+// so starting from something familiar and then tweaking is still one click.
+// Note Yellow had to become "splash" for all three (was "attack" for two of
+// them) since attack is now red-exclusive -- see the GEM_POOLS comment.
+const PRESETS = {
   warden: {
-    name: "Warden", hp: 60, spellCost: 1,
-    blurb: "No spells at all. Green blocks for a turn, blue is armour that keeps.",
-    colors: { R: "attack", G: "block", Y: "splash", B: "armour" },
-    shapes: { line4: "cleave", L: "stun" },
+    name: "Warden",
+    picks: { R: "attack", G: "block", Y: "splash", B: "armour", line4: "cleave", hard: "stun_L" },
   },
   bleeder: {
-    name: "Bleeder", hp: 50, spellCost: 1,
-    blurb: "No spells. Bleeds instead of hitting, and drinks what it spills.",
-    colors: { R: "bleed", G: "block", Y: "attack", B: "lifesteal" },
-    shapes: { line4: "bleed_burst", T: "bleed_detonate" },
+    name: "Bleeder",
+    picks: { R: "bleed", G: "block", Y: "splash", B: "lifesteal", line4: "bleed_burst", hard: "bleed_detonate_T" },
   },
   stormcaller: {
-    name: "Stormcaller", hp: 42, spellCost: 1,
-    blurb: "Red AND blue make mana. Fragile, but casts far more often.",
-    colors: { R: "mana", G: "block", Y: "attack", B: "mana" },
-    shapes: { line4: "spell_buff", cross: "double_next_spell" },
+    name: "Stormcaller",
+    picks: { R: "mana", G: "block", Y: "splash", B: "mana", line4: "spell_buff", hard: "double_cross" },
   },
 };
 
@@ -463,23 +509,26 @@ const SETS = {
   },
 };
 
-function buildLoadout(classKey, setKey) {
-  const base = CLASSES[classKey];
+// picks = { R, G, Y, B: <gem name>, line4: <gem name>, hard: <hard-shape gem key> }
+function buildLoadout(picks, setKey) {
   const set = setKey ? SETS[setKey] : null;
-  const colors = Object.assign({}, base.colors);
+  const colors = {};
+  for (const col of COLORS) colors[col] = picks[col];
   if (set && set.colorOverrides) {
-    for (const c of Object.keys(set.colorOverrides)) {
-      const eff = set.colorOverrides[c];
-      if (eff === null) delete colors[c]; else colors[c] = eff;
+    for (const col of Object.keys(set.colorOverrides)) {
+      const eff = set.colorOverrides[col];
+      if (eff === null) delete colors[col]; else colors[col] = eff;
     }
   }
+  const hardGem = HARD_SHAPE_GEMS[picks.hard];
+  const shapes = { line4: picks.line4, [hardGem.shape]: hardGem.trigger };
   return {
-    name: set ? `${base.name} — ${set.name}` : base.name,
-    blurb: set ? `${base.blurb} ${set.blurb}` : base.blurb,
-    hp: base.hp,
-    spellCost: base.spellCost,
+    name: set ? `Custom build — ${set.name}` : "Custom build",
+    blurb: set ? set.blurb : "Crafted from your own recipe book, one gem per socket.",
+    hp: BASE_HP,
+    spellCost: 1,
     colors,
-    shapes: base.shapes,
+    shapes,
     spells: set ? set.spells : undefined,
     locustColor: set ? set.locustColor : undefined,
     wildChargeColor: set ? set.wildChargeColor : undefined,
@@ -1655,8 +1704,8 @@ function startEncounter() {
   render(true);
 }
 
-function begin(classKey, setKey) {
-  loadout = buildLoadout(classKey, setKey);
+function begin(picksArg, setKey) {
+  loadout = buildLoadout(picksArg, setKey);
   player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
              shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0 };
   encounter = 0;
@@ -1677,19 +1726,17 @@ function begin(classKey, setKey) {
 
 /* ============================ setup screen ============================ */
 
-let pickedClass = null, pickedSet = null;
+const COLOUR_NAME = { R: "Red", G: "Green", Y: "Yellow", B: "Blue" };
+let picks = { R: null, G: null, Y: null, B: null, line4: null, hard: null };
+let pickedSet = null;
 
-function classCardHtml(k, l) {
-  return `<div class="card" data-k="${k}">
-    <h3>${l.name} <span style="color:var(--dim);font-weight:400">${l.hp} hp</span></h3>
-    <p>${l.blurb}</p>
-    <div class="keyrow">${COLORS.map(c => {
-      const eff = effectLabel(l, c) || "inert";
-      return `<span class="chip"><b style="color:var(--${c})">${EFFECT_ICON[eff] || ""}</b> ${eff.replace(/_/g, " ")}</span>`;
-    }).join("")}</div>
-    <div class="keyrow">${Object.entries(l.shapes).map(([s, t]) =>
-      `<span class="chip">${MARK[s] || s} → ${t.replace(/_/g, " ")}</span>`).join("")}</div>
-  </div>`;
+function allSocketsFilled() {
+  return COLORS.every(c => picks[c]) && picks.line4 && picks.hard;
+}
+
+function gemCardHtml(slot, gem, title, desc) {
+  return `<div class="card" data-slot="${slot}" data-gem="${gem}">
+    <h3>${title}</h3><p>${desc || ""}</p></div>`;
 }
 
 function setCardHtml(k, s) {
@@ -1699,42 +1746,77 @@ function setCardHtml(k, s) {
   </div>`;
 }
 
+function presetCardHtml(k, p) {
+  return `<div class="card" data-preset="${k}">
+    <h3>${p.name}</h3>
+    <p>Fills all 6 sockets to match the old ${p.name} build -- tweak freely after.</p>
+  </div>`;
+}
+
 function renderSetupPreview() {
   const el = document.getElementById("setupPreview");
-  if (!pickedClass) { el.textContent = ""; return; }
-  const l = buildLoadout(pickedClass, pickedSet);
-  el.innerHTML = `<b>${l.name}</b> (${l.hp} hp) &nbsp; ` + COLORS.map(c => {
+  if (!allSocketsFilled()) { el.textContent = ""; return; }
+  const l = buildLoadout(picks, pickedSet);
+  const colourChips = COLORS.map(c => {
     const eff = effectLabel(l, c) || "inert";
     return `<span class="chip"><b style="color:var(--${c})">${EFFECT_ICON[eff] || ""}</b> ${eff.replace(/_/g, " ")}</span>`;
   }).join(" ");
+  const shapeChips = Object.entries(l.shapes).map(([s, t]) =>
+    `<span class="chip">${MARK["lesser_" + s] || s} → ${t.replace(/_/g, " ")}</span>`).join(" ");
+  el.innerHTML = `<b>${l.name}</b> (${l.hp} hp) &nbsp; ${colourChips} &nbsp; ${shapeChips}`;
 }
 
 function refreshSetupSelection() {
-  document.querySelectorAll("#classCards .card").forEach(c =>
-    c.classList.toggle("selected", c.dataset.k === pickedClass));
+  document.querySelectorAll("#colourSockets .card").forEach(c =>
+    c.classList.toggle("selected", picks[c.dataset.slot] === c.dataset.gem));
+  document.querySelectorAll("#gemLine4 .card").forEach(c =>
+    c.classList.toggle("selected", picks.line4 === c.dataset.gem));
+  document.querySelectorAll("#gemHard .card").forEach(c =>
+    c.classList.toggle("selected", picks.hard === c.dataset.gem));
   document.querySelectorAll("#setCards .card").forEach(c =>
     c.classList.toggle("selected", c.dataset.k === pickedSet));
+
+  const filled = allSocketsFilled();
   const btn = document.getElementById("beginBtn");
-  btn.disabled = !pickedClass;
-  btn.textContent = pickedClass ? "Begin the dungeon" : "Choose a class to begin";
+  btn.disabled = !filled;
+  btn.textContent = filled ? "Begin the dungeon" : "Fill every socket to begin";
   renderSetupPreview();
 }
 
-document.getElementById("classCards").innerHTML =
-  Object.entries(CLASSES).map(([k, l]) => classCardHtml(k, l)).join("");
+document.getElementById("colourSockets").innerHTML = COLORS.map(color => `
+  <div class="socket-row">
+    <div class="socket-label"><span class="socket-swatch" style="background:var(--${color})"></span>${COLOUR_NAME[color]}</div>
+    <div class="cards mini">${GEM_POOLS[color].map(gem =>
+      gemCardHtml(color, gem, `<b style="color:var(--${color})">${EFFECT_ICON[gem] || ""}</b> ${gem}`, EFFECT_DESC[gem])
+    ).join("")}</div>
+  </div>`).join("");
+
+document.getElementById("gemLine4").innerHTML = Object.keys(LINE4_GEMS).map(gem =>
+  gemCardHtml("line4", gem, gem.replace(/_/g, " "), TRIGGER_DESC[gem])).join("");
+
+document.getElementById("gemHard").innerHTML = Object.entries(HARD_SHAPE_GEMS).map(([key, g]) =>
+  gemCardHtml("hard", key, `${MARK["lesser_" + g.shape] || g.shape} ${g.shape} → ${g.trigger.replace(/_/g, " ")}`,
+    TRIGGER_DESC[g.trigger])).join("");
+
 document.getElementById("setCards").innerHTML =
   Object.entries(SETS).map(([k, s]) => setCardHtml(k, s)).join("");
+document.getElementById("presetCards").innerHTML =
+  Object.entries(PRESETS).map(([k, p]) => presetCardHtml(k, p)).join("");
 
-document.querySelectorAll("#classCards .card").forEach(c => c.onclick = () => {
-  pickedClass = c.dataset.k;
+document.querySelectorAll("#colourSockets .card, #gemLine4 .card, #gemHard .card").forEach(c => c.onclick = () => {
+  picks[c.dataset.slot] = c.dataset.gem;
   refreshSetupSelection();
 });
 document.querySelectorAll("#setCards .card").forEach(c => c.onclick = () => {
   pickedSet = pickedSet === c.dataset.k ? null : c.dataset.k; // click again to deselect
   refreshSetupSelection();
 });
+document.querySelectorAll("#presetCards .card").forEach(c => c.onclick = () => {
+  picks = Object.assign({}, PRESETS[c.dataset.preset].picks);
+  refreshSetupSelection();
+});
 document.getElementById("beginBtn").onclick = () => {
-  if (pickedClass) begin(pickedClass, pickedSet);
+  if (allSocketsFilled()) begin(picks, pickedSet);
 };
 </script>
 </body>
