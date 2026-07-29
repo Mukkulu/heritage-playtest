@@ -248,6 +248,16 @@
     <div class="banner">
       <h2 id="overTitle"></h2>
       <p id="overText"></p>
+      <p class="sub" style="margin:0 0 8px">
+        Send this run to the designer — helps tune the game. Totally optional.
+      </p>
+      <input id="testerName" type="text" placeholder="Your name (optional)"
+             style="width:100%;max-width:340px;margin:0 auto 8px;display:block;padding:8px;
+                    border-radius:8px;border:1px solid var(--line);background:var(--panel2);
+                    color:var(--text);font:inherit">
+      <div class="logbtns" style="max-width:340px;margin:0 auto 10px">
+        <button id="subBtn" style="flex:2;font-weight:700">Submit log to designer</button>
+      </div>
       <div class="logbtns" style="max-width:340px;margin:0 auto 14px">
         <button id="dlBtn2">Download log</button>
         <button id="cpBtn2">Copy log</button>
@@ -1239,6 +1249,31 @@ async function copyLog(btn) {
   setTimeout(() => (btn.textContent = "Copy log"), 1800);
 }
 
+// Submits the run report to the designer's Google Form so playtest data
+// comes back automatically -- no email, no file for the tester to send.
+// Cross-origin POST to Google Forms never returns a readable response
+// (opaque under no-cors), so this is optimistic: a network-level failure
+// still reports itself via the catch, but a same-origin-looking success is
+// assumed once the request completes without throwing.
+const FORM_ACTION = "https://docs.google.com/forms/d/e/1FAIpQLSf-15BmG5aMkkCT6_Ndg2bBAOSwUjHm6bq9cvESCW9Vtd7rtw/formResponse";
+const FORM_ENTRY_TESTER = "entry.1056053453";
+const FORM_ENTRY_LOG = "entry.1279131651";
+
+async function submitLog(btn, nameInput) {
+  const body = new URLSearchParams();
+  body.set(FORM_ENTRY_TESTER, (nameInput && nameInput.value || "").trim());
+  body.set(FORM_ENTRY_LOG, buildReport());
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    await fetch(FORM_ACTION, { method: "POST", mode: "no-cors", body });
+    btn.textContent = "Sent — thank you!";
+  } catch {
+    btn.textContent = "Couldn't send — try Download instead";
+    btn.disabled = false;
+  }
+}
+
 function finish(won) {
   closeEncounter(won ? "cleared" : "died");
   document.getElementById("game").classList.add("hidden");
@@ -1531,6 +1566,8 @@ function begin(classKey, setKey) {
     const b = document.getElementById(id);
     b.onclick = () => copyLog(b);
   }
+  document.getElementById("subBtn").onclick = () =>
+    submitLog(document.getElementById("subBtn"), document.getElementById("testerName"));
   startEncounter();
 }
 
