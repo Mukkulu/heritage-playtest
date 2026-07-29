@@ -300,7 +300,11 @@ const CUSTODIAN_DMG_PER_MATCH = 1;
 const CUSTODIAN_GEMS_PER_STRIKE = 50;
 // Archmage of Chaos: chance a chaos-fired heal (never a player-cast one)
 // misfires onto a random living enemy instead of the player. Placeholder.
-const ARCHMAGE_HEAL_MISFIRE_CHANCE = 0.5;
+// Chance a chaos-fired BENEFICIAL spell (never a player-cast one) misfires
+// onto a random living enemy instead of the player. Applies to any spell
+// flagged `beneficial` in SPELLS, not just heal. Lowered from 0.5 after the
+// designer's own play (playtest note: "healed one of the enemies").
+const ARCHMAGE_BENEFICIAL_MISFIRE_CHANCE = 0.3;
 
 const SHAPE_MULT = { line3: 1, line4: 2, line5: 3, L: 3, T: 4, cross: 5 };
 const RANK = ["line3", "line4", "line5", "L", "T", "cross"];
@@ -348,7 +352,7 @@ const BLAST_DESC = {
 };
 
 const SPELLS = {
-  heal:    { cost: 60, label: "Heal",    note: "+15 health" },
+  heal:    { cost: 60, label: "Heal",    note: "+15 health", beneficial: true },
   fire:    { cost: 50, label: "Fire",    note: "20 to one" },
   thunder: { cost: 90, label: "Thunder", note: "12 to all" },
 };
@@ -1002,14 +1006,16 @@ function availableSpells() {
 /* The actual effect of a spell, split out from cast() so an autonomous proc
    (Archmage of Chaos's wild charge) can fire one for free, bypassing
    mana/cost/escalation entirely. chaotic=true marks a proc-fired cast
-   rather than a player-chosen one -- only matters for heal, which can then
-   misfire onto a random living enemy instead of the player. A deliberate
-   player cast is never chaotic and always heals the player. */
+   rather than a player-chosen one -- only a spell flagged `beneficial` in
+   SPELLS can then misfire onto a random living enemy instead of the
+   player. A deliberate player cast is never chaotic and never misfires. */
 function resolveSpellEffect(name, factor, chaotic) {
   const dbl = factor === 2 ? " (DOUBLED)" : "";
+  const misfire = chaotic && SPELLS[name].beneficial &&
+    Math.random() < ARCHMAGE_BENEFICIAL_MISFIRE_CHANCE;
   if (name === "heal") {
     const amt = 15 * factor;
-    if (chaotic && Math.random() < ARCHMAGE_HEAL_MISFIRE_CHANCE) {
+    if (misfire) {
       const alive = living();
       if (alive.length) {
         const victim = pick(alive);
