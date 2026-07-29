@@ -1290,7 +1290,13 @@ const FORM_ENTRY_LOG = "entry.1279131651";
 
 async function submitLog(btn, nameInput) {
   const body = new URLSearchParams();
-  body.set(FORM_ENTRY_TESTER, (nameInput && nameInput.value || "").trim());
+  // The form's Tester question is set to required, and mode:"no-cors" means
+  // we can never see a server-side rejection (a blank-name submission got a
+  // silent HTTP 400 -- confirmed the cause of the empty spreadsheet). Always
+  // send something so the required field is never empty, regardless of
+  // whether that form setting ever changes.
+  const name = (nameInput && nameInput.value || "").trim() || "Anonymous";
+  body.set(FORM_ENTRY_TESTER, name);
   body.set(FORM_ENTRY_LOG, buildReport());
   btn.disabled = true;
   btn.textContent = "Sending…";
