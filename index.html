@@ -292,7 +292,11 @@ const COLORS = ["R", "G", "Y", "B"];
 const SWIPES_PER_TURN = 3;
 const PER_GEM = 2;
 const SPECIAL_GEMS = 5;
-const CAST_ESCALATION = 1.5;
+// Stormcaller: a line4 match empowers the next spell cast instead of
+// easing its cost -- replaced the old escalating-price / free_cast
+// mechanic (the designer found it confusing). Fraction bonus per banked
+// stack; meant to be scalable through gear later (flat constant for now).
+const LINE4_SPELL_BUFF = 0.5;
 
 // Cascading Custodian (colour-independent -- fires on every swipe). Both
 // placeholders pending real playtest logs.
@@ -339,7 +343,7 @@ const TRIGGER_DESC = {
   stun: "target loses its next action; spills onto an unstunned enemy",
   bleed_burst: "a lump of extra bleed stacks",
   bleed_detonate: "consumes the biggest bleed on the field for 3x as instant damage",
-  free_cast: "your next spell doesn't raise the escalating price",
+  spell_buff: `your next spell hits ${Math.round(LINE4_SPELL_BUFF * 100)}% harder (stacks, banked until spent)`,
   double_next_spell: "your next spell fires twice",
 };
 
@@ -380,7 +384,7 @@ const CLASSES = {
     name: "Stormcaller", hp: 42, spellCost: 1,
     blurb: "Red AND blue make mana. Fragile, but casts far more often.",
     colors: { R: "mana", G: "block", Y: "attack", B: "mana" },
-    shapes: { line4: "free_cast", cross: "double_next_spell" },
+    shapes: { line4: "spell_buff", cross: "double_next_spell" },
   },
 };
 
@@ -491,7 +495,7 @@ function endlessWave(n) {
 /* ============================ state ============================ */
 
 let board, special, loadout;
-let player, enemies, targetIdx, encounter, swipes, castCount, busy = false;
+let player, enemies, targetIdx, encounter, swipes, busy = false;
 
 const rnd = n => Math.floor(Math.random() * n);
 const pick = a => a[rnd(a.length)];
@@ -772,9 +776,10 @@ function fireTrigger(trigger, value, tag) {
       ts.forEach(e => e.hp -= each);
       log(`>> ${tag} TRIGGER: cleave hits ${ts.length} for ${each}`, "spec");
     }
-  } else if (trigger === "free_cast") {
-    player.freeCasts += 1;
-    log(`>> ${tag} TRIGGER: next cast won't raise the price (${player.freeCasts} banked)`, "spec");
+  } else if (trigger === "spell_buff") {
+    player.spellBuffStacks += 1;
+    const pct = Math.round(LINE4_SPELL_BUFF * 100);
+    log(`>> ${tag} TRIGGER: next spell +${pct}% (${player.spellBuffStacks} banked)`, "spec");
   } else if (trigger === "double_next_spell") {
     player.doubleNext = true;
     log(`>> ${tag} TRIGGER: next spell fires twice`, "spec");
@@ -993,7 +998,8 @@ function fireCascadeBonus(totalMatches, totalGems, firstMatchGems) {
 /* ============================ turn ============================ */
 
 function spellCost(name) {
-  return Math.max(1, Math.round(SPELLS[name].cost * loadout.spellCost * Math.pow(CAST_ESCALATION, castCount)));
+  // Flat cost, gear discount only -- no more per-cast-in-turn escalation.
+  return Math.max(1, Math.round(SPELLS[name].cost * loadout.spellCost));
 }
 
 // Which spells this build actually knows -- defaults to all of them unless
@@ -1004,37 +1010,39 @@ function availableSpells() {
 }
 
 /* The actual effect of a spell, split out from cast() so an autonomous proc
-   (Archmage of Chaos's wild charge) can fire one for free, bypassing
-   mana/cost/escalation entirely. chaotic=true marks a proc-fired cast
-   rather than a player-chosen one -- only a spell flagged `beneficial` in
-   SPELLS can then misfire onto a random living enemy instead of the
-   player. A deliberate player cast is never chaotic and never misfires. */
+   (Archmage of Chaos's wild charge) can fire one for free, bypassing mana
+   /cost entirely. chaotic=true marks a proc-fired cast rather than a
+   player-chosen one -- only a spell flagged `beneficial` in SPELLS can
+   then misfire onto a random living enemy instead of the player. A
+   deliberate player cast is never chaotic and never misfires. */
 function resolveSpellEffect(name, factor, chaotic) {
-  const dbl = factor === 2 ? " (DOUBLED)" : "";
+  const boosted = factor !== 1 ? ` (x${+factor.toFixed(2)})` : "";
   const misfire = chaotic && SPELLS[name].beneficial &&
     Math.random() < ARCHMAGE_BENEFICIAL_MISFIRE_CHANCE;
   if (name === "heal") {
-    const amt = 15 * factor;
+    const amt = Math.round(15 * factor);
     if (misfire) {
       const alive = living();
       if (alive.length) {
         const victim = pick(alive);
         victim.hp += amt;
-        return { text: `wild heal misfires onto ${victim.name} for ${amt}${dbl}`, cls: "hit" };
+        return { text: `wild heal misfires onto ${victim.name} for ${amt}${boosted}`, cls: "hit" };
       }
     }
     player.hp = Math.min(player.maxHp, player.hp + amt);
-    return { text: `heal for ${amt}${dbl}`, cls: "good" };
+    return { text: `heal for ${amt}${boosted}`, cls: "good" };
   }
   if (name === "fire") {
     const t = currentTarget();
     if (!t) return { text: "nothing to burn", cls: "good" };
-    t.hp -= 20 * factor;
-    return { text: `fire hits ${t.name} for ${20 * factor}${dbl}`, cls: "hit" };
+    const dmg = Math.round(20 * factor);
+    t.hp -= dmg;
+    return { text: `fire hits ${t.name} for ${dmg}${boosted}`, cls: "hit" };
   }
   if (name === "thunder") {
-    living().forEach(e => e.hp -= 12 * factor);
-    return { text: `thunder hits everything for ${12 * factor}${dbl}`, cls: "hit" };
+    const dmg = Math.round(12 * factor);
+    living().forEach(e => e.hp -= dmg);
+    return { text: `thunder hits everything for ${dmg}${boosted}`, cls: "hit" };
   }
   return { text: "?", cls: "good" };
 }
@@ -1046,9 +1054,9 @@ function cast(name) {
   if (player.mana < cost) return;
   player.mana -= cost;
   stats.spells[name] = (stats.spells[name] || 0) + 1;
-  if (player.freeCasts) player.freeCasts--; else castCount++;
-  const factor = player.doubleNext ? 2 : 1;
-  player.doubleNext = false;
+  let factor = 1;
+  if (player.doubleNext) { factor *= 2; player.doubleNext = false; }
+  if (player.spellBuffStacks) { factor *= 1 + LINE4_SPELL_BUFF; player.spellBuffStacks--; }
   const result = resolveSpellEffect(name, factor, false);
   log(result.text, result.cls);
   afterAction();
@@ -1113,8 +1121,8 @@ async function endTurn() {
   stats.dmgTaken += Math.max(0, hpBefore - player.hp);
   player.block = 0;
   swipes = SWIPES_PER_TURN;
-  castCount = 0;
-  player.freeCasts = 0;
+  // spellBuffStacks and doubleNext both persist until actually spent on a
+  // cast -- banked buffs for "whenever I next cast", not same-turn-only.
   busy = false;
   render(true);
   afterAction();
@@ -1502,7 +1510,8 @@ function render(fresh) {
 
   const buffs = [];
   if (player.doubleNext) buffs.push("NEXT SPELL FIRES TWICE");
-  if (player.freeCasts) buffs.push(`${player.freeCasts} CAST(S) AT NO PRICE RISE`);
+  if (player.spellBuffStacks)
+    buffs.push(`${player.spellBuffStacks} SPELL BUFF STACK(S) (+${Math.round(LINE4_SPELL_BUFF * 100)}% EACH)`);
   if (player.locusts) buffs.push(`${player.locusts} LOCUST(S) BANKED`);
   if (player.wildCharges) buffs.push(`${player.wildCharges} WILD CHARGE (of ${loadout.wildChargeThreshold})`);
   q("buffs").innerHTML = buffs.map(b => `<div class="buff">${b}</div>`).join("");
@@ -1559,11 +1568,10 @@ function startEncounter() {
   player.armour = 0;
   player.shield = 0;
   player.doubleNext = false;
-  player.freeCasts = 0;
+  player.spellBuffStacks = 0;
   player.locusts = 0;
   player.wildCharges = 0;
   swipes = SWIPES_PER_TURN;
-  castCount = 0;
   document.getElementById("encName").textContent = title;
   document.getElementById("encSub").textContent = encounter < ENCOUNTERS.length
     ? `Encounter ${encounter + 1} of ${ENCOUNTERS.length} — ${loadout.name}`
@@ -1575,7 +1583,7 @@ function startEncounter() {
 function begin(classKey, setKey) {
   loadout = buildLoadout(classKey, setKey);
   player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
-             shield: 0, doubleNext: false, freeCasts: 0, locusts: 0, wildCharges: 0 };
+             shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0 };
   encounter = 0;
   document.getElementById("setup").classList.add("hidden");
   document.getElementById("game").classList.remove("hidden");
