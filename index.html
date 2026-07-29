@@ -1,0 +1,1491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Match-3 Combat Prototype</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1d2028;
+    --panel2: #262a34;
+    --line: #333844;
+    --text: #e6e8ee;
+    --dim: #8b93a5;
+    --R: #e0544e;
+    --G: #4cb377;
+    --Y: #dfb13a;
+    --B: #4a8ede;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: .3px; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 18px; }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 20px 16px 40px; }
+
+  /* ---------- loadout picker ---------- */
+  .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .1s;
+  }
+  .card:hover { border-color: #55607a; transform: translateY(-2px); }
+  .card h3 { margin: 0 0 4px; font-size: 16px; }
+  .card p { margin: 0 0 10px; color: var(--dim); font-size: 13px; }
+  .keyrow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chip {
+    font-size: 12px; padding: 2px 8px; border-radius: 20px;
+    background: var(--panel2); border: 1px solid var(--line);
+  }
+  .chip b { font-weight: 700; }
+
+  /* ---------- game layout ---------- */
+  .game { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr) 330px; align-items: start; }
+  @media (max-width: 860px) { .game { grid-template-columns: 1fr; } }
+
+  .boardwrap { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  #board {
+    display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    transition: opacity .12s;
+  }
+  #board.resolving { opacity: .72; pointer-events: none; }
+  .gem {
+    position: relative; aspect-ratio: 1 / 1; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 15px; color: #10121a;
+    cursor: grab; transition: transform .12s, box-shadow .12s;
+  }
+  .gem.R { background: var(--R); }
+  .gem.G { background: var(--G); }
+  .gem.Y { background: var(--Y); }
+  .gem.B { background: var(--B); }
+  .gem.sel { box-shadow: 0 0 0 3px #fff inset; transform: scale(.88); }
+  .gem.adj { box-shadow: 0 0 0 2px rgba(255,255,255,.35) inset; }
+  .gem.willmatch { box-shadow: 0 0 0 3px #fff inset; }
+  .gem.willfuse { box-shadow: 0 0 0 3px #d9a3f2 inset; }
+  /* Predicted result of this one swap. No cascades -- only what's certain. */
+  .gem .tip {
+    position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%);
+    background: #0c0e13; border: 1px solid var(--line); color: var(--text);
+    font-size: 11px; font-weight: 700; line-height: 1; letter-spacing: .2px;
+    padding: 3px 6px; border-radius: 5px; white-space: nowrap; pointer-events: none; z-index: 5;
+  }
+  .gem .tip.trig { border-color: #b9932f; color: #f0cf78; }
+  /* Top row tips would clip above the board, so flip them below. */
+  #board > .gem:nth-child(-n+8) .tip { bottom: auto; top: calc(100% + 4px); }
+  .gem.spec { box-shadow: 0 0 0 3px rgba(255,255,255,.85) inset, 0 0 14px rgba(255,255,255,.35); }
+  .gem .mark { font-size: 17px; text-shadow: 0 1px 0 rgba(255,255,255,.35); }
+  /* What this colour does for you, drawn on the gem itself. */
+  .gem .icon { font-size: 17px; opacity: .5; line-height: 1; }
+  .gem.spec .icon {
+    position: absolute; right: 3px; bottom: 1px; font-size: 10px; opacity: .85;
+  }
+
+  /* ---------- reference overlay ---------- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(8,9,13,.78); z-index: 50;
+    display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 28px 14px;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    max-width: 640px; width: 100%; padding: 20px 22px;
+  }
+  .modal h2 { margin: 0 0 4px; font-size: 18px; }
+  .modal h3 { margin: 20px 0 8px; font-size: 14px; color: var(--dim); text-transform: uppercase; letter-spacing: .6px; }
+  .modal table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .modal td, .modal th { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .modal th { color: var(--dim); font-weight: 600; font-size: 12px; }
+  .modal td.g { font-size: 17px; width: 34px; text-align: center; }
+  .modal td.m { font-weight: 800; width: 34px; text-align: center; font-size: 16px; }
+  .modal .yours { color: #f0cf78; font-weight: 700; }
+  .modal .none { color: var(--dim); }
+  .refbtn { margin-left: 10px; font-size: 12.5px; padding: 4px 10px; vertical-align: 3px; }
+  .gem.pop { animation: pop .22s ease-out; }
+  @keyframes pop { 0% { transform: scale(1); } 45% { transform: scale(1.28); filter: brightness(1.8); } 100% { transform: scale(1); } }
+  .gem.fresh { animation: drop .22s ease-out; }
+  @keyframes drop { 0% { transform: translateY(-24px); opacity: 0; } 100% { transform: none; opacity: 1; } }
+
+  /* ---------- side panel ---------- */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .panel + .panel { margin-top: 12px; }
+  .stat { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  .stat span:last-child { font-weight: 700; }
+  .bar { height: 6px; border-radius: 4px; background: var(--panel2); overflow: hidden; margin: 4px 0 10px; }
+  .bar > i { display: block; height: 100%; background: var(--G); transition: width .25s; }
+  .bar.mana > i { background: var(--B); }
+  .buff {
+    margin: 8px 0; padding: 6px 10px; border-radius: 6px; font-size: 12.5px; font-weight: 700;
+    background: rgba(223,177,58,.14); border: 1px solid rgba(223,177,58,.5); color: #f0cf78;
+  }
+  .enemy { border-top: 1px solid var(--line); padding: 9px 0; cursor: pointer; }
+  .enemy:first-of-type { border-top: 0; }
+  .enemy.dead { opacity: .3; cursor: default; }
+  .enemy.target { background: rgba(255,255,255,.045); border-radius: 6px; padding-left: 8px; padding-right: 8px; }
+  .enemy .top { display: flex; justify-content: space-between; font-size: 14px; }
+  .enemy .tele { font-size: 12.5px; color: var(--dim); }
+  .enemy .tele.now { color: #f0a0a0; font-weight: 700; }
+  .enemy .bar { height: 5px; margin: 4px 0 3px; }
+  .enemy .bar > i { background: var(--R); }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: var(--panel2); margin-left: 6px; }
+
+  button {
+    font: inherit; color: var(--text); background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: #5b6580; }
+  button:disabled { opacity: .38; cursor: not-allowed; }
+  .spells { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+  .spells button { padding: 8px 4px; font-size: 13px; }
+  .spells small { display: block; color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .endbtn { width: 100%; font-weight: 700; }
+
+  #log {
+    height: 210px; overflow-y: auto; font-size: 12.5px; line-height: 1.5;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--dim);
+  }
+  #log .hit { color: #f2a3a3; }
+  #log .good { color: #9fd8b4; }
+  #log .spec { color: #f0cf78; font-weight: 700; }
+  #log .combo { color: #d9a3f2; font-weight: 700; }
+  #log .turn { color: #6d778d; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
+
+  .logbtns { display: flex; gap: 8px; margin-top: 10px; }
+  .logbtns button { flex: 1; font-size: 13px; padding: 6px; }
+
+  .banner { text-align: center; padding: 26px 16px; }
+  .banner h2 { margin: 0 0 8px; }
+  .banner p { color: var(--dim); margin: 0 0 16px; }
+  .hint { color: var(--dim); font-size: 12.5px; margin-top: 10px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ loadout picker ============ -->
+  <div id="setup">
+    <h1>Match-3 Combat Prototype</h1>
+    <div class="sub">Same four colours, three completely different games. Pick one.</div>
+    <div class="cards" id="cards"></div>
+    <div class="hint">
+      Drag a gem into its neighbour to swap. A swap that makes no match snaps back and costs nothing.
+      Three committed swipes per turn. Health carries between fights; mana resets.
+    </div>
+  </div>
+
+  <!-- ============ game ============ -->
+  <div id="game" class="hidden">
+    <h1 id="encTitle"><span id="encName"></span><button class="refbtn" id="refBtn">Reference</button></h1>
+    <div class="sub" id="encSub"></div>
+    <div class="game">
+      <div class="boardwrap">
+        <div id="board"></div>
+        <div class="hint" id="legend"></div>
+      </div>
+      <div>
+        <div class="panel">
+          <div class="stat"><span>Health</span><span id="hpTxt"></span></div>
+          <div class="bar"><i id="hpBar"></i></div>
+          <div class="stat" id="manaRow"><span>Mana</span><span id="manaTxt"></span></div>
+          <div class="bar mana" id="manaBarRow"><i id="manaBar"></i></div>
+          <div class="stat"><span>Block</span><span id="blockTxt"></span></div>
+          <div class="stat" style="margin-top:6px"><span>Swipes left</span><span id="swipeTxt"></span></div>
+          <div id="buffs"></div>
+        </div>
+        <div class="panel" id="spellPanel"><div class="spells" id="spells"></div></div>
+        <div class="panel"><button class="endbtn" id="endBtn">End turn</button></div>
+        <div class="panel" id="enemies"></div>
+        <div class="panel">
+          <div id="log"></div>
+          <div class="logbtns">
+            <button id="dlBtn">Download log</button>
+            <button id="cpBtn">Copy log</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ end banner ============ -->
+  <div id="over" class="hidden">
+    <div class="banner">
+      <h2 id="overTitle"></h2>
+      <p id="overText"></p>
+      <div class="logbtns" style="max-width:340px;margin:0 auto 14px">
+        <button id="dlBtn2">Download log</button>
+        <button id="cpBtn2">Copy log</button>
+      </div>
+      <button onclick="location.reload()">Play again</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================ rules ============================ */
+
+const SIZE = 8;
+const COLORS = ["R", "G", "Y", "B"];
+const SWIPES_PER_TURN = 3;
+const PER_GEM = 2;
+const SPECIAL_GEMS = 5;
+const CAST_ESCALATION = 1.5;
+
+// Cascading Custodian (colour-independent -- fires on every swipe). Both
+// placeholders pending real playtest logs.
+const CUSTODIAN_DMG_PER_MATCH = 1;
+const CUSTODIAN_GEMS_PER_STRIKE = 50;
+// Archmage of Chaos: chance a chaos-fired heal (never a player-cast one)
+// misfires onto a random living enemy instead of the player. Placeholder.
+const ARCHMAGE_HEAL_MISFIRE_CHANCE = 0.5;
+
+const SHAPE_MULT = { line3: 1, line4: 2, line5: 3, L: 3, T: 4, cross: 5 };
+const RANK = ["line3", "line4", "line5", "L", "T", "cross"];
+const MAKES_SPECIAL = new Set(["line4", "line5", "L", "T", "cross"]);
+const MARK = { line4: "4", line5: "5", L: "L", T: "T", cross: "+" };
+/* One glyph per effect, drawn on every gem bound to it. Colour tells you
+   which pillar, glyph tells you what it currently does -- and the glyph is
+   what stays meaningful when a different loadout rebinds the colour. */
+const EFFECT_ICON = {
+  attack: "✖", bleed: "≈", block: "▣", mana: "◆", splash: "∴",
+  armour: "▲", lifesteal: "♥", wild_charge: "✦",
+};
+const EFFECT_DESC = {
+  attack: "damage to your target",
+  bleed: "stacks that tick every turn",
+  block: "absorbs damage this turn only (half rate)",
+  mana: "fuel for spells, carries across the fight",
+  splash: "damage to every enemy except your target",
+  armour: "absorbs damage and KEEPS across turns (third rate)",
+  lifesteal: "heals you (half rate); past full it builds a shield instead",
+  wild_charge: "no direct effect -- builds toward a free random spell",
+};
+
+// What a colour is bound to, for display -- covers the case where a set
+// bonus (Archmage's wild charge) claims a colour with no ordinary effect at
+// all. Returns null only for genuine inert rubble.
+function effectLabel(l, c) {
+  return l.colors[c] || (c === l.wildChargeColor ? "wild_charge" : null);
+}
+const TRIGGER_DESC = {
+  cleave: "damage to every enemy",
+  stun: "target loses its next action; spills onto an unstunned enemy",
+  bleed_burst: "a lump of extra bleed stacks",
+  bleed_detonate: "consumes the biggest bleed on the field for 3x as instant damage",
+  free_cast: "your next spell doesn't raise the escalating price",
+  double_next_spell: "your next spell fires twice",
+};
+
+const BLAST_DESC = {
+  line4: "clears its row",
+  line5: "blasts 3x3",
+  L: "clears its column",
+  T: "clears row AND column",
+  cross: "destroys every gem of its colour",
+};
+
+const SPELLS = {
+  heal:    { cost: 60, label: "Heal",    note: "+15 health" },
+  fire:    { cost: 50, label: "Fire",    note: "20 to one" },
+  thunder: { cost: 90, label: "Thunder", note: "12 to all" },
+};
+
+const LOADOUTS = {
+  warden: {
+    name: "Warden", hp: 60, spellCost: 1,
+    blurb: "No spells at all. Green blocks for a turn, blue is armour that keeps.",
+    colors: { R: "attack", G: "block", Y: "splash", B: "armour" },
+    shapes: { line4: "cleave", L: "stun" },
+  },
+  bleeder: {
+    name: "Bleeder", hp: 50, spellCost: 1,
+    blurb: "No spells. Bleeds instead of hitting, and drinks what it spills.",
+    colors: { R: "bleed", G: "block", Y: "attack", B: "lifesteal" },
+    shapes: { line4: "bleed_burst", T: "bleed_detonate" },
+  },
+  stormcaller: {
+    name: "Stormcaller", hp: 42, spellCost: 1,
+    blurb: "Red AND blue make mana. Fragile, but casts far more often.",
+    colors: { R: "mana", G: "block", Y: "attack", B: "mana" },
+    shapes: { line4: "free_cast", cross: "double_next_spell" },
+  },
+  // Pharaoh's Curse -- 2pc rebinds green to lifesteal (same mechanic as
+  // Bleeder's blue, overheal capped into a shield at half max HP). 4pc:
+  // every green gem that pays out (base match, blast-caught, or
+  // fusion-combo-caught) breeds one locust; locusts bite a random living
+  // enemy for 1 each at end of turn, then reset to zero.
+  pharaoh: {
+    name: "Pharaoh's Curse", hp: 55, spellCost: 1,
+    blurb: "2pc: green heals into a shield, like Bleeder's blue. 4pc: every green gem matched also breeds a locust that bites something at turn's end.",
+    colors: { R: "attack", G: "lifesteal", Y: "splash", B: "block" },
+    shapes: { line4: "cleave", L: "stun" },
+    locustColor: "G",
+  },
+  // Cascading Custodian -- colour-independent, no colour rebind at all.
+  // Fires automatically after every swipe resolves, regardless of what
+  // colour was matched. 2pc: +1 damage per match beyond the first in that
+  // swipe's full cascade. 4pc: the strike repeats once more per
+  // CUSTODIAN_GEMS_PER_STRIKE gems matched beyond the first match; re-fetches
+  // target each repeat so a mid-burst kill rolls onto the next enemy.
+  custodian: {
+    name: "Cascading Custodian", hp: 50, spellCost: 1,
+    blurb: "2pc: every swipe autonomously strikes for +1 per match beyond the first, no input needed. 4pc: that strike repeats once more per " + CUSTODIAN_GEMS_PER_STRIKE + " gems matched beyond the first match.",
+    colors: { R: "attack", G: "block", Y: "splash", B: "armour" },
+    shapes: { line4: "cleave", L: "stun" },
+    cascadeBonus: true,
+  },
+  // Archmage of Chaos -- blue has NO direct effect at all (deliberately):
+  // its whole identity is building "wild charge", which pays off as a free
+  // random spell at end_turn once the threshold is crossed (MTG storm /
+  // Yogg-Saron flavour). A chaos-fired heal can misfire onto a random
+  // living enemy instead of the player -- a deliberate player cast never
+  // does. Drop "heal" from `spells` to remove that risk entirely.
+  archmage: {
+    name: "Archmage of Chaos", hp: 48, spellCost: 1,
+    blurb: "Blue does nothing on its own -- it builds wild charge. At 5 charges (4pc; 2pc alone would need 10), a free random spell fires automatically at end of turn. No mana cost, no aim -- and a chaos-fired heal can land on an enemy instead of you.",
+    colors: { R: "attack", G: "block", Y: "splash" },
+    shapes: { line4: "cleave", L: "stun" },
+    spells: ["heal", "fire", "thunder"],
+    wildChargeColor: "B",
+    wildChargeThreshold: 5,
+  },
+};
+
+/* Sized against a HUMAN, not the random-play simulator. Re-sized a second time
+   after logged runs measured 110-170 damage a turn (the first pass assumed
+   75-130): the warren was the only encounter that ever dealt damage, and the
+   dragon died twice without firing its breath. Ogre and dragon have `resolve`:
+   it takes that many stuns to stagger them (one stun per turn permastunned
+   any lone enemy). */
+const ENCOUNTERS = [
+  ["A lone rat", () => [mkEnemy("Rat", 70, [["bite", 1, 12]])]],
+  ["Two bandits on the road", () => [
+    mkEnemy("Bandit", 190, [["slash", 1, 16], ["stab", 2, 30]]),
+    mkEnemy("Bandit", 190, [["slash", 1, 16], ["stab", 2, 30]]),
+  ]],
+  ["An ogre in the dark", () => [mkEnemy("Ogre", 600, [["club", 2, 34], ["stomp", 3, 55]], 2)]],
+  ["A goblin warren", () => Array.from({ length: 6 }, (_, i) =>
+    mkEnemy("Goblin " + (i + 1), 62, [["jab", 1, 9]]))],
+  ["The dragon", () => [mkEnemy("Dragon", 1600,
+    [["claw", 1, 26], ["tail sweep", 2, 40], ["BREATH", 3, 85]], 3)]],
+];
+
+/* After the dragon: escalating waves until the player falls. The run no longer
+   ends in victory -- it ends when the world finds your limit. */
+function endlessWave(n) {
+  const hpM = 1 + 0.25 * n, dmgM = 1 + 0.15 * n;
+  const scaled = (name, hp, actions, resolve = 1) =>
+    mkEnemy(name, Math.round(hp * hpM),
+            actions.map(([l, w, d]) => [l, w, Math.round(d * dmgM)]), resolve);
+  const templates = [
+    ["The warren stirs again", () => Array.from(
+      { length: Math.min(8, 6 + Math.floor((n + 1) / 2)) },
+      (_, i) => scaled("Goblin " + (i + 1), 62, [["jab", 1, 9]]))],
+    ["A bandit company", () => Array.from({ length: 4 }, (_, i) =>
+      scaled("Bandit " + (i + 1), 190, [["slash", 1, 16], ["stab", 2, 30]]))],
+    ["Ogres, brothers", () => Array.from({ length: 2 }, (_, i) =>
+      scaled("Ogre " + (i + 1), 600, [["club", 2, 34], ["stomp", 3, 55]], 2))],
+    ["An elder dragon", () => [scaled("Elder dragon", 1600,
+      [["claw", 1, 26], ["tail sweep", 2, 40], ["BREATH", 3, 85]], 3)]],
+  ];
+  const [title, make] = templates[(n - 1) % templates.length];
+  return [`${title} (wave ${n})`, make];
+}
+
+/* ============================ state ============================ */
+
+let board, special, loadout;
+let player, enemies, targetIdx, encounter, swipes, castCount, busy = false;
+
+const rnd = n => Math.floor(Math.random() * n);
+const pick = a => a[rnd(a.length)];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const key = (r, c) => r * SIZE + c;
+
+function mkEnemy(name, hp, actions, resolve = 1) {
+  // resolve: how many stuns it takes to stagger this enemy. Each stun ticks
+  // the meter (overflow rather than waste); at `resolve` ticks it loses its
+  // action and the meter resets.
+  const e = { name, hp, maxHp: hp, actions, bleed: 0, stunned: 0,
+              resolve, stunMeter: 0 };
+  queueNext(e);
+  // Desynchronise a group so six goblins don't land as one wall on turn one.
+  e.countdown += rnd(2);
+  return e;
+}
+function queueNext(e) {
+  e.pending = pick(e.actions);
+  e.countdown = e.pending[1];
+}
+const living = () => enemies.filter(e => e.hp > 0);
+function currentTarget() {
+  const alive = living();
+  if (!alive.length) return null;
+  if (!enemies[targetIdx] || enemies[targetIdx].hp <= 0) targetIdx = enemies.indexOf(alive[0]);
+  return enemies[targetIdx];
+}
+
+/* ============================ board ============================ */
+
+function emptySpecials() { return Array.from({ length: SIZE }, () => new Array(SIZE).fill(null)); }
+
+function newBoard() {
+  for (;;) {
+    const b = Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => pick(COLORS)));
+    if (!findMatches(b).length && hasMove(b)) return b;
+  }
+}
+
+function findRuns(b) {
+  const runs = [];
+  for (let r = 0; r < SIZE; r++) {
+    let c = 0;
+    while (c < SIZE) {
+      let end = c;
+      while (end + 1 < SIZE && b[r][end + 1] === b[r][c]) end++;
+      if (end - c + 1 >= 3) runs.push({ kind: "h", fixed: r, a: c, b: end, color: b[r][c] });
+      c = end + 1;
+    }
+  }
+  for (let c = 0; c < SIZE; c++) {
+    let r = 0;
+    while (r < SIZE) {
+      let end = r;
+      while (end + 1 < SIZE && b[end + 1][c] === b[r][c]) end++;
+      if (end - r + 1 >= 3) runs.push({ kind: "v", fixed: c, a: r, b: end, color: b[r][c] });
+      r = end + 1;
+    }
+  }
+  return runs;
+}
+
+function runCells(run) {
+  const out = [];
+  if (run.kind === "h") for (let c = run.a; c <= run.b; c++) out.push([run.fixed, c]);
+  else for (let r = run.a; r <= run.b; r++) out.push([r, run.fixed]);
+  return out;
+}
+
+function classify(runs) {
+  const hs = runs.filter(r => r.kind === "h");
+  const vs = runs.filter(r => r.kind === "v");
+  if (!hs.length || !vs.length) {
+    const longest = Math.max(...runs.map(r => r.b - r.a + 1));
+    return longest >= 5 ? "line5" : longest === 4 ? "line4" : "line3";
+  }
+  let best = "L";
+  for (const h of hs) for (const v of vs) {
+    if (h.a <= v.fixed && v.fixed <= h.b && v.a <= h.fixed && h.fixed <= v.b) {
+      const hMid = v.fixed !== h.a && v.fixed !== h.b;
+      const vMid = h.fixed !== v.a && h.fixed !== v.b;
+      const s = hMid && vMid ? "cross" : hMid || vMid ? "T" : "L";
+      if (RANK.indexOf(s) > RANK.indexOf(best)) best = s;
+    }
+  }
+  return best;
+}
+
+function findMatches(b) {
+  const runs = findRuns(b);
+  if (!runs.length) return [];
+  let groups = [];
+  for (const run of runs) {
+    const cells = new Set(runCells(run).map(([r, c]) => key(r, c)));
+    let merged = [run], mergedCells = cells, rest = [];
+    for (const g of groups) {
+      let touches = false;
+      for (const k of g.cells) if (mergedCells.has(k)) { touches = true; break; }
+      if (touches) { merged = merged.concat(g.runs); g.cells.forEach(k => mergedCells.add(k)); }
+      else rest.push(g);
+    }
+    rest.push({ runs: merged, cells: mergedCells });
+    groups = rest;
+  }
+  return groups.map(g => ({
+    color: g.runs[0].color,
+    shape: classify(g.runs),
+    cells: [...g.cells].map(k => [Math.floor(k / SIZE), k % SIZE]),
+  }));
+}
+
+function collapse(cells) {
+  const cleared = new Set(cells.map(([r, c]) => key(r, c)));
+  for (let c = 0; c < SIZE; c++) {
+    const keepB = [], keepS = [];
+    for (let r = 0; r < SIZE; r++) {
+      if (!cleared.has(key(r, c))) { keepB.push(board[r][c]); keepS.push(special[r][c]); }
+    }
+    const missing = SIZE - keepB.length;
+    for (let i = 0; i < missing; i++) { keepB.unshift(pick(COLORS)); keepS.unshift(null); }
+    for (let r = 0; r < SIZE; r++) { board[r][c] = keepB[r]; special[r][c] = keepS[r]; }
+  }
+}
+
+function swapCells(r1, c1, r2, c2) {
+  [board[r1][c1], board[r2][c2]] = [board[r2][c2], board[r1][c1]];
+  [special[r1][c1], special[r2][c2]] = [special[r2][c2], special[r1][c1]];
+}
+
+function hasMove(b) {
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {
+    for (const [dr, dc] of [[0, 1], [1, 0]]) {
+      const r2 = r + dr, c2 = c + dc;
+      if (r2 >= SIZE || c2 >= SIZE) continue;
+      [b[r][c], b[r2][c2]] = [b[r2][c2], b[r][c]];
+      const ok = findMatches(b).length > 0;
+      [b[r][c], b[r2][c2]] = [b[r2][c2], b[r][c]];
+      if (ok) return true;
+    }
+  }
+  return false;
+}
+
+function reshuffle() {
+  const flat = [];
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) flat.push(board[r][c]);
+  for (;;) {
+    for (let i = flat.length - 1; i > 0; i--) { const j = rnd(i + 1); [flat[i], flat[j]] = [flat[j], flat[i]]; }
+    let i = 0;
+    for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) board[r][c] = flat[i++];
+    if (!findMatches(board).length && hasMove(board)) return;
+  }
+}
+
+/* ============================ effects ============================ */
+
+/* Every line ever written, plus the tallies worth balancing around. The
+   on-screen log is a tail; this is the whole thing, downloadable as a file. */
+const fullLog = [];
+const stats = {
+  shapes: {}, specials: 0, fusions: 0, combos: 0,
+  spells: {}, turns: 0, dmgTaken: 0, encounters: [],
+};
+
+function log(text, cls) {
+  fullLog.push(`[e${encounter + 1} t${stats.turns + 1}] ${text}`);
+  const el = document.getElementById("log");
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = text;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+}
+
+function applyEffect(effect, value, tag) {
+  const t = currentTarget();
+  if (effect === "attack") {
+    if (t) { t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit"); }
+  } else if (effect === "bleed") {
+    if (t) { const s = Math.max(1, Math.floor(value / 4)); t.bleed += s; log(`${tag}: +${s} bleed on ${t.name}`, "hit"); }
+  } else if (effect === "block") {
+    // Block buys damage at half rate; at parity a defensive build never gets hit.
+    const amt = Math.max(1, Math.floor(value / 2));
+    player.block += amt; log(`${tag}: +${amt} block`, "good");
+  } else if (effect === "armour") {
+    // Unlike block, armour survives the turn -- a martial build builds a wall
+    // across a long fight instead of re-earning it every turn.
+    const amt = Math.max(1, Math.floor(value / 3));
+    player.armour += amt; log(`${tag}: +${amt} armour`, "good");
+  } else if (effect === "lifesteal") {
+    // Overflow rather than waste: healing past full becomes a shield (capped
+    // at half max HP). Before this, a healthy Bleeder's blue was a dead
+    // colour -- whole runs of "+0 health".
+    const amt = Math.max(1, Math.floor(value / 2));
+    const healed = Math.min(amt, player.maxHp - player.hp);
+    player.hp += healed;
+    const over = amt - healed;
+    let gained = 0;
+    if (over > 0) {
+      const cap = Math.floor(player.maxHp / 2);
+      gained = Math.max(0, Math.min(over, cap - player.shield));
+      player.shield += gained;
+    }
+    if (healed && gained > 0) log(`${tag}: +${healed} health, +${gained} shield`, "good");
+    else if (gained > 0) log(`${tag}: +${gained} shield`, "good");
+    else log(`${tag}: +${healed} health`, "good");
+  } else if (effect === "mana") {
+    player.mana += value; log(`${tag}: +${value} mana`, "good");
+  } else if (effect === "splash") {
+    const others = living().filter(e => e !== t);
+    if (others.length) {
+      const each = Math.max(1, Math.floor(value / 2));
+      others.forEach(e => e.hp -= each);
+      log(`${tag}: ${each} splash to ${others.length} other(s)`, "hit");
+    } else if (t) { t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit"); }
+  }
+}
+
+function stunTarget() {
+  // Overflow rather than waste: spill onto an unstunned enemy first.
+  const alive = living();
+  if (!alive.length) return [null, false];
+  const cur = currentTarget();
+  if (cur && !cur.stunned) return [cur, false];
+  for (const e of alive) if (!e.stunned) return [e, true];
+  return [cur, false];
+}
+
+function fireTrigger(trigger, value, tag) {
+  const t = currentTarget();
+  if (trigger === "stun") {
+    const [victim, redirected] = stunTarget();
+    if (victim) {
+      const note = redirected ? " (redirected)" : "";
+      if (victim.resolve > 1) {
+        // Every stun ticks the meter — even while the enemy is already down.
+        // Extending a big enemy's stun costs as much as causing it, or one
+        // stun a turn re-locks a staggered dragon forever.
+        victim.stunMeter += 1;
+        if (victim.stunMeter >= victim.resolve) {
+          victim.stunMeter = 0;
+          victim.stunned += 1;
+          const what = victim.stunned > 1 ? `stun extended (now ${victim.stunned} turns)` : "stunned";
+          log(`>> ${tag} TRIGGER: ${victim.name} staggers — ${what}${note}`, "spec");
+        } else {
+          log(`>> ${tag} TRIGGER: ${victim.name} staggers (${victim.stunMeter}/${victim.resolve})${note}`, "spec");
+        }
+      } else {
+        victim.stunned += 1;
+        const full = !redirected && victim.stunned > 1 ? ` (now ${victim.stunned} turns)` : note;
+        log(`>> ${tag} TRIGGER: ${victim.name} stunned${full}`, "spec");
+      }
+    }
+  } else if (trigger === "bleed_burst" && t) {
+    const s = Math.max(2, Math.floor(value / 3));
+    t.bleed += s; log(`>> ${tag} TRIGGER: +${s} bleed burst`, "spec");
+  } else if (trigger === "bleed_detonate") {
+    const bleeding = living().filter(e => e.bleed);
+    if (bleeding.length) {
+      const v = bleeding.reduce((a, b) => (b.bleed > a.bleed ? b : a));
+      const burst = v.bleed * 3;
+      v.hp -= burst;
+      log(`>> ${tag} TRIGGER: ${v.name}'s ${v.bleed} bleed detonates for ${burst}`, "spec");
+      v.bleed = 0;
+    } else if (t) {
+      // Overflow rather than waste: with nothing to pop, seed the next one
+      // instead of fizzling. Chained T's used to eat the field and then
+      // announce they'd done nothing.
+      const s = Math.max(2, Math.floor(value / 3));
+      t.bleed += s;
+      log(`>> ${tag} TRIGGER: nothing to pop — opens ${s} bleed instead`, "spec");
+    }
+  } else if (trigger === "cleave") {
+    const ts = living();
+    if (ts.length) {
+      const each = Math.max(1, Math.floor(value / 2));
+      ts.forEach(e => e.hp -= each);
+      log(`>> ${tag} TRIGGER: cleave hits ${ts.length} for ${each}`, "spec");
+    }
+  } else if (trigger === "free_cast") {
+    player.freeCasts += 1;
+    log(`>> ${tag} TRIGGER: next cast won't raise the price (${player.freeCasts} banked)`, "spec");
+  } else if (trigger === "double_next_spell") {
+    player.doubleNext = true;
+    log(`>> ${tag} TRIGGER: next spell fires twice`, "spec");
+  }
+}
+
+/* ============================ detonation ============================ */
+
+function blastCells(shape, r, c) {
+  const hit = [];
+  const push = (y, x) => { if (y >= 0 && y < SIZE && x >= 0 && x < SIZE) hit.push([y, x]); };
+  if (shape === "line4") for (let x = 0; x < SIZE; x++) push(r, x);
+  else if (shape === "line5") { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) push(r + dy, c + dx); }
+  else if (shape === "L") for (let y = 0; y < SIZE; y++) push(y, c);
+  else if (shape === "T") { for (let x = 0; x < SIZE; x++) push(r, x); for (let y = 0; y < SIZE; y++) push(y, c); }
+  else if (shape === "cross") {
+    const hue = board[r][c];
+    for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) if (board[y][x] === hue) push(y, x);
+  }
+  return hit;
+}
+
+function detonateAll(fuse) {
+  const blasted = new Set();
+  let guard = 0;
+  while (fuse.length && guard++ < 40) {
+    const [shape, r, c] = fuse.shift();
+    special[r][c] = null;                  // never let a blast relight its source
+    const color = board[r][c];
+    const value = SPECIAL_GEMS * PER_GEM * SHAPE_MULT[shape];
+    const tag = `${shape} SPECIAL`;
+    const effect = loadout.colors[color];
+    if (effect) applyEffect(effect, value, tag);
+    const trig = loadout.shapes[shape];
+    if (trig) fireTrigger(trig, value, tag);
+
+    const fresh = blastCells(shape, r, c).filter(([y, x]) => !blasted.has(key(y, x)));
+    fresh.forEach(([y, x]) => blasted.add(key(y, x)));
+
+    // Only gems matching the special's own colour pay out.
+    let caught = 0;
+    for (const [y, x] of fresh) {
+      if (board[y][x] === color) caught++;
+      if (special[y][x]) { const held = special[y][x]; special[y][x] = null; fuse.push([held, y, x]); }
+    }
+    if (effect && caught) applyEffect(effect, caught * PER_GEM, `${shape} blast`);
+    if (caught && color === loadout.locustColor) player.locusts += caught;
+    if (caught && color === loadout.wildChargeColor) player.wildCharges += caught;
+    log(`** ${shape} SPECIAL detonates -- ${fresh.length} gems destroyed`, "spec");
+  }
+  return [...blasted].map(k => [Math.floor(k / SIZE), k % SIZE]);
+}
+
+function comboBlast(shape, r1, c1, r2, c2) {
+  const r = Math.floor((r1 + r2) / 2), c = Math.floor((c1 + c2) / 2);
+  const all = [];
+  for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) all.push([y, x]);
+  if (shape === "line4") return [all.filter(p => Math.abs(p[0] - r) <= 1), "three whole rows"];
+  if (shape === "L") return [all.filter(p => Math.abs(p[1] - c) <= 1), "three whole columns"];
+  if (shape === "line5") return [all.filter(p => Math.abs(p[0] - r) <= 2 && Math.abs(p[1] - c) <= 2), "a 5x5 crater"];
+  if (shape === "T") return [all.filter(p => Math.abs(p[0] - r) <= 1 || Math.abs(p[1] - c) <= 1), "three rows AND three columns"];
+  return [blastCells(shape, r, c), "a doubled blast"];
+}
+
+function comboDetonate(shape, colours, cells) {
+  const value = SPECIAL_GEMS * PER_GEM * SHAPE_MULT[shape] * 2;
+  const tag = `${shape}+${shape} COMBO`;
+  for (const col of [...colours].sort()) {
+    const eff = loadout.colors[col];
+    if (eff) applyEffect(eff, value, tag);
+  }
+  const trig = loadout.shapes[shape];
+  if (trig) { fireTrigger(trig, value, tag); fireTrigger(trig, value, tag); }
+
+  const chained = [], caught = {};
+  for (const [y, x] of cells) {
+    const col = board[y][x];
+    if (colours.has(col)) caught[col] = (caught[col] || 0) + 1;
+    if (special[y][x]) { const held = special[y][x]; special[y][x] = null; chained.push([held, y, x]); }
+  }
+  for (const col of Object.keys(caught).sort()) {
+    const count = caught[col];
+    const eff = loadout.colors[col];
+    if (eff) applyEffect(eff, count * PER_GEM, `${shape} combo blast`);
+    if (count && col === loadout.locustColor) player.locusts += count;
+    if (count && col === loadout.wildChargeColor) player.wildCharges += count;
+  }
+  log(`** COMBO destroys ${cells.length} gems`, "combo");
+  return cells.concat(detonateAll(chained));
+}
+
+function doFuse(r1, c1, r2, c2) {
+  const a = special[r1][c1], b = special[r2][c2];
+  const colours = new Set([board[r1][c1], board[r2][c2]]);
+  special[r1][c1] = null; special[r2][c2] = null;
+  stats.fusions++;
+  if (a === b) stats.combos++;
+  let blasted;
+
+  if (a === "cross" && b === "cross") {
+    log("!! FUSION: cross + cross -- THE ENTIRE BOARD GOES", "combo");
+    const cells = [];
+    for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) cells.push([y, x]);
+    blasted = comboDetonate("cross", new Set(COLORS), cells);
+  } else if (a === "cross" || b === "cross") {
+    const other = a === "cross" ? b : a;
+    const pos = a === "cross" ? [r2, c2] : [r1, c1];
+    const hue = board[pos[0]][pos[1]];
+    const seeded = [];
+    for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++)
+      if (board[y][x] === hue) seeded.push([other, y, x]);
+    log(`!! FUSION: cross + ${other} -- every ${hue} gem becomes a ${other} special (${seeded.length} of them)`, "combo");
+    blasted = detonateAll(seeded);
+  } else if (a === b) {
+    const [cells, label] = comboBlast(a, r1, c1, r2, c2);
+    log(`!! FUSION: two ${a} specials -- ${label}`, "combo");
+    blasted = comboDetonate(a, colours, cells);
+  } else {
+    const best = RANK.indexOf(a) >= RANK.indexOf(b) ? a : b;
+    log(`!! FUSION: ${a} + ${b} -- both detonate as ${best}`, "combo");
+    blasted = detonateAll([[best, r1, c1], [best, r2, c2]]);
+  }
+  collapse(blasted);
+}
+
+/* ============================ resolution ============================ */
+
+const anchorOf = cells => {
+  const sorted = cells.slice().sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  return sorted[Math.floor(sorted.length / 2)];
+};
+
+async function resolveBoard() {
+  let chain = 0;
+  let totalMatches = 0, totalGems = 0, firstMatchGems = null;
+  for (;;) {
+    const matches = findMatches(board);
+    if (!matches.length) break;
+    chain++;
+    const clear = new Set();
+    const fuse = [];
+    for (const { color, shape, cells } of matches) {
+      stats.shapes[shape] = (stats.shapes[shape] || 0) + 1;
+      totalMatches++; totalGems += cells.length;
+      if (firstMatchGems === null) firstMatchGems = cells.length;
+      // Set bonuses keyed on a specific colour fire regardless of whether
+      // that colour also has an ordinary effect bound (Archmage's blue has
+      // none at all), so these must not sit behind the effect check below.
+      if (color === loadout.locustColor) player.locusts += cells.length;
+      if (color === loadout.wildChargeColor) player.wildCharges += cells.length;
+
+      const effect = loadout.colors[color];
+      const tag = chain === 1 ? shape : `${shape} (cascade ${chain})`;
+      if (effect) applyEffect(effect, cells.length * PER_GEM, tag);
+
+      for (const [r, c] of cells) {
+        if (special[r][c]) { fuse.push([special[r][c], r, c]); special[r][c] = null; }
+      }
+      let anchor = null;
+      if (MAKES_SPECIAL.has(shape)) {
+        anchor = anchorOf(cells);
+        special[anchor[0]][anchor[1]] = shape;
+        stats.specials++;
+        log(`++ ${shape} leaves a special ${color} gem (${BLAST_DESC[shape]})`, "spec");
+      }
+      for (const [r, c] of cells) {
+        if (!anchor || r !== anchor[0] || c !== anchor[1]) clear.add(key(r, c));
+      }
+    }
+    detonateAll(fuse).forEach(([r, c]) => clear.add(key(r, c)));
+
+    // Long chains accelerate, so a 15-link cascade doesn't lock input for
+    // six seconds. The first few links stay slow enough to read.
+    const pace = Math.max(45, 190 - chain * 16);
+    const cells = [...clear].map(k => [Math.floor(k / SIZE), k % SIZE]);
+    markPop(cells);
+    render();
+    await sleep(pace);
+    collapse(cells);
+    render(true);
+    await sleep(pace * 0.8);
+  }
+  if (!hasMove(board)) { reshuffle(); log("no moves left -- board reshuffled"); render(true); }
+  if (loadout.cascadeBonus) fireCascadeBonus(totalMatches, totalGems, firstMatchGems || 0);
+  return chain;
+}
+
+/* Cascading Custodian: fires automatically at the end of every swipe's
+   resolution, no player input and no colour requirement.
+   2pc -- +1 damage per match beyond the first.
+   4pc -- that strike repeats once more per CUSTODIAN_GEMS_PER_STRIKE gems
+   matched beyond the first match. Re-fetches the target each strike so a
+   kill mid-burst rolls onto the next enemy instead of overkilling a corpse
+   (rule 6: overflow rather than waste). */
+function fireCascadeBonus(totalMatches, totalGems, firstMatchGems) {
+  const matchesBeyondFirst = Math.max(0, totalMatches - 1);
+  if (!matchesBeyondFirst) return;
+  const perStrike = matchesBeyondFirst * CUSTODIAN_DMG_PER_MATCH;
+  const gemsBeyondFirst = Math.max(0, totalGems - firstMatchGems);
+  const hits = 1 + Math.floor(gemsBeyondFirst / CUSTODIAN_GEMS_PER_STRIKE);
+
+  let dealt = 0, landed = 0;
+  for (let i = 0; i < hits; i++) {
+    const t = currentTarget();
+    if (!t) break;
+    t.hp -= perStrike;
+    dealt += perStrike;
+    landed++;
+  }
+  if (dealt) {
+    const note = landed > 1 ? ` x${landed} strikes` : "";
+    log(`Cascading Custodian: ${matchesBeyondFirst} match(es) beyond the first -> ${perStrike}/strike${note} = ${dealt} damage`, "spec");
+  }
+}
+
+/* ============================ turn ============================ */
+
+function spellCost(name) {
+  return Math.max(1, Math.round(SPELLS[name].cost * loadout.spellCost * Math.pow(CAST_ESCALATION, castCount)));
+}
+
+// Which spells this build actually knows -- defaults to all of them unless
+// a loadout explicitly restricts the list (Archmage of Chaos does, so
+// dropping "heal" from it removes the misfire risk entirely).
+function availableSpells() {
+  return loadout.spells || Object.keys(SPELLS);
+}
+
+/* The actual effect of a spell, split out from cast() so an autonomous proc
+   (Archmage of Chaos's wild charge) can fire one for free, bypassing
+   mana/cost/escalation entirely. chaotic=true marks a proc-fired cast
+   rather than a player-chosen one -- only matters for heal, which can then
+   misfire onto a random living enemy instead of the player. A deliberate
+   player cast is never chaotic and always heals the player. */
+function resolveSpellEffect(name, factor, chaotic) {
+  const dbl = factor === 2 ? " (DOUBLED)" : "";
+  if (name === "heal") {
+    const amt = 15 * factor;
+    if (chaotic && Math.random() < ARCHMAGE_HEAL_MISFIRE_CHANCE) {
+      const alive = living();
+      if (alive.length) {
+        const victim = pick(alive);
+        victim.hp += amt;
+        return { text: `wild heal misfires onto ${victim.name} for ${amt}${dbl}`, cls: "hit" };
+      }
+    }
+    player.hp = Math.min(player.maxHp, player.hp + amt);
+    return { text: `heal for ${amt}${dbl}`, cls: "good" };
+  }
+  if (name === "fire") {
+    const t = currentTarget();
+    if (!t) return { text: "nothing to burn", cls: "good" };
+    t.hp -= 20 * factor;
+    return { text: `fire hits ${t.name} for ${20 * factor}${dbl}`, cls: "hit" };
+  }
+  if (name === "thunder") {
+    living().forEach(e => e.hp -= 12 * factor);
+    return { text: `thunder hits everything for ${12 * factor}${dbl}`, cls: "hit" };
+  }
+  return { text: "?", cls: "good" };
+}
+
+function cast(name) {
+  if (busy) return;
+  if (!availableSpells().includes(name)) return;
+  const cost = spellCost(name);
+  if (player.mana < cost) return;
+  player.mana -= cost;
+  stats.spells[name] = (stats.spells[name] || 0) + 1;
+  if (player.freeCasts) player.freeCasts--; else castCount++;
+  const factor = player.doubleNext ? 2 : 1;
+  player.doubleNext = false;
+  const result = resolveSpellEffect(name, factor, false);
+  log(result.text, result.cls);
+  afterAction();
+}
+
+async function endTurn() {
+  if (busy) return;
+  busy = true;
+  stats.turns++;
+  const hpBefore = player.hp;
+
+  if (player.locusts) {
+    const bitten = {};
+    for (let i = 0; i < player.locusts; i++) {
+      const alive = living();
+      if (!alive.length) break;
+      const victim = pick(alive);
+      victim.hp -= 1;
+      bitten[victim.name] = (bitten[victim.name] || 0) + 1;
+    }
+    for (const [name, dmg] of Object.entries(bitten)) log(`locusts swarm ${name} for ${dmg}`, "hit");
+    player.locusts = 0; // consumed by the action, every turn
+  }
+
+  const threshold = loadout.wildChargeThreshold;
+  if (threshold && player.wildCharges >= threshold) {
+    let fires = Math.floor(player.wildCharges / threshold);
+    player.wildCharges %= threshold; // overflow carries, not wasted
+    for (let i = 0; i < fires; i++) {
+      const name = pick(availableSpells());
+      const result = resolveSpellEffect(name, 1, true);
+      log(`wild charge erupts -- ${name}: ${result.text}`, result.cls);
+    }
+  }
+
+  log("— enemy turn —", "turn");
+  for (const e of living()) {
+    if (e.bleed) { e.hp -= e.bleed; log(`${e.name} bleeds for ${e.bleed}`, "good"); }
+  }
+  for (const e of living()) {
+    if (e.stunned) { e.stunned--; log(`${e.name} is stunned and loses its action`, "good"); continue; }
+    e.countdown--;
+    if (e.countdown <= 0) {
+      const [label, , dmg] = e.pending;
+      const blocked = Math.min(player.block, dmg);
+      player.block -= blocked;
+      const soaked = Math.min(player.armour, dmg - blocked);
+      player.armour -= soaked;
+      const shielded = Math.min(player.shield, dmg - blocked - soaked);
+      player.shield -= shielded;
+      const taken = dmg - blocked - soaked - shielded;
+      player.hp -= taken;
+      const parts = [];
+      if (blocked) parts.push(`${blocked} blocked`);
+      if (soaked) parts.push(`${soaked} soaked by armour`);
+      if (shielded) parts.push(`${shielded} absorbed by shield`);
+      log(`${e.name} uses ${label}: ${taken} damage` +
+        (parts.length ? ` (${parts.join(", ")})` : ""), "hit");
+      queueNext(e);
+    }
+  }
+  stats.dmgTaken += Math.max(0, hpBefore - player.hp);
+  player.block = 0;
+  swipes = SWIPES_PER_TURN;
+  castCount = 0;
+  player.freeCasts = 0;
+  busy = false;
+  render(true);
+  afterAction();
+}
+
+function afterAction() {
+  render(true);
+  if (player.hp <= 0) return finish(false);
+  if (!living().length) return nextEncounter();
+}
+
+function closeEncounter(outcome) {
+  const rec = stats.encounters[encounter];
+  if (rec && !rec.done) {
+    rec.done = true;
+    rec.outcome = outcome;
+    rec.turns = stats.turns - rec.turnsAt;
+    rec.hpEnd = Math.max(0, player.hp);
+  }
+}
+
+function nextEncounter() {
+  closeEncounter("cleared");
+  encounter++;
+  if (encounter === ENCOUNTERS.length) {
+    log("— the dragon is dead, and the world sends worse —", "turn");
+    log("ENDLESS MODE: escalating waves until you fall. Every death is data.", "turn");
+  }
+  startEncounter();
+}
+
+const SHAPE_HOW = {
+  line3: "three in a row",
+  line4: "four in a row",
+  line5: "five in a row",
+  L: "two lines meeting at their ends",
+  T: "a line ending in the middle of another",
+  cross: "two lines crossing at both middles",
+};
+
+function showReference() {
+  const colourRows = COLORS.map(c => {
+    const eff = effectLabel(loadout, c) || "inert";
+    return `<tr><td class="g" style="color:var(--${c})">${EFFECT_ICON[eff] || ""}</td>
+      <td><b style="color:var(--${c})">${c}</b></td>
+      <td><b>${eff.replace(/_/g, " ")}</b><br><span class="none">${EFFECT_DESC[eff] || "no effect of its own"}</span></td></tr>`;
+  }).join("");
+
+  const shapeRows = RANK.map(s => {
+    const trig = loadout.shapes[s];
+    const leaves = MAKES_SPECIAL.has(s)
+      ? `leaves <b>${MARK[s]}</b> — ${BLAST_DESC[s]}`
+      : `<span class="none">no special</span>`;
+    const yours = trig
+      ? `<span class="yours">${trig.replace(/_/g, " ")}</span><br><span class="none">${TRIGGER_DESC[trig]}</span>`
+      : `<span class="none">—</span>`;
+    return `<tr><td class="m">${MARK[s] || "3"}</td>
+      <td><b>${s}</b><br><span class="none">${SHAPE_HOW[s]}</span></td>
+      <td>x${SHAPE_MULT[s]}<br>${leaves}</td>
+      <td>${yours}</td></tr>`;
+  }).join("");
+
+  const combos = [
+    ["4 + 4", "three whole rows"], ["5 + 5", "a 5x5 crater"],
+    ["L + L", "three whole columns"], ["T + T", "three rows AND three columns"],
+    ["+ + +", "the entire board"],
+    ["+ + anything", "every gem of that colour becomes that special, all detonating"],
+    ["mismatched", "the weaker is promoted to the stronger, both detonate"],
+  ].map(([a, b]) => `<tr><td class="m">${a}</td><td colspan="3">${b}</td></tr>`).join("");
+
+  const div = document.createElement("div");
+  div.className = "overlay";
+  div.innerHTML = `<div class="modal">
+    <h2>${loadout.name} — reference</h2>
+    <p class="none" style="margin:0;font-size:13px">
+      Colours mean whatever your gear says. The glyph on each gem is what it does.</p>
+    <h3>Colours</h3><table>${colourRows}</table>
+    <h3>Chains</h3>
+    <table><tr><th></th><th>shape</th><th>value &amp; special</th><th>your trigger</th></tr>
+      ${shapeRows}</table>
+    <p class="none" style="font-size:12.5px;margin:8px 0 0">
+      A chain of four or more doesn't pay out its bonus when you make it — it leaves a
+      special gem. Match that gem later to set it off. The blast only pays out gems
+      matching the special's own colour.</p>
+    <h3>Fusions — swipe two specials together</h3>
+    <table>${combos}</table>
+    <p style="margin:18px 0 0;text-align:right"><button id="refClose">Close</button></p>
+  </div>`;
+  div.onclick = ev => { if (ev.target === div) div.remove(); };
+  document.body.appendChild(div);
+  document.getElementById("refClose").onclick = () => div.remove();
+}
+
+function buildReport() {
+  const L = [];
+  const total = Object.values(stats.shapes).reduce((a, b) => a + b, 0) || 1;
+  const cleared = stats.encounters.filter(e => e.outcome === "cleared").length;
+  L.push("MATCH-3 COMBAT PROTOTYPE — RUN LOG");
+  L.push(new Date().toISOString());
+  L.push("");
+  L.push(`loadout        ${loadout.name} (${loadout.hp} hp)`);
+  L.push(`colours        ${COLORS.map(c => c + "=" + loadout.colors[c]).join("  ")}`);
+  L.push(`triggers       ${Object.entries(loadout.shapes).map(([s, t]) => s + " -> " + t).join("  ")}`);
+  const waves = Math.max(0, cleared - ENCOUNTERS.length);
+  L.push(`result         cleared ${Math.min(cleared, ENCOUNTERS.length)} of ${ENCOUNTERS.length}` +
+         (waves ? ` +${waves} endless wave(s)` : "") +
+         (player.hp <= 0 ? (encounter < ENCOUNTERS.length
+           ? `, died in encounter ${encounter + 1}`
+           : `, died in endless wave ${encounter - ENCOUNTERS.length + 1}`) : ""));
+  L.push(`health         ${Math.max(0, player.hp)}/${player.maxHp}`);
+  L.push(`turns          ${stats.turns}`);
+  L.push(`damage taken   ${stats.dmgTaken}`);
+  L.push("");
+  L.push("shapes formed");
+  for (const s of RANK) {
+    const n = stats.shapes[s] || 0;
+    L.push(`  ${s.padEnd(7)} ${String(n).padStart(4)}  ${(n / total * 100).toFixed(1).padStart(5)}%` +
+           `  ${(n / Math.max(1, stats.turns)).toFixed(2)}/turn`);
+  }
+  L.push(`  total   ${String(total).padStart(4)}`);
+  L.push("");
+  L.push(`specials created ${stats.specials}`);
+  L.push(`fusions          ${stats.fusions} (matched-pair combos: ${stats.combos})`);
+  L.push(`spells cast      ${Object.keys(stats.spells).length
+    ? Object.entries(stats.spells).map(([k, v]) => k + " x" + v).join(", ") : "none"}`);
+  L.push("");
+  L.push("encounters");
+  stats.encounters.forEach((e, i) => {
+    L.push(`  ${i + 1}. ${e.name.padEnd(26)} ${String(e.turns ?? "-").padStart(3)} turns   ` +
+           `hp ${e.hpStart} -> ${e.hpEnd ?? "-"}   ${e.outcome || "not reached"}`);
+  });
+  L.push("");
+  L.push("---------------- full log ----------------");
+  return L.concat(fullLog).join("\n");
+}
+
+function downloadLog() {
+  const blob = new Blob([buildReport()], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `match3-log-${loadout.name.toLowerCase()}-${Date.now()}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function copyLog(btn) {
+  try {
+    await navigator.clipboard.writeText(buildReport());
+    btn.textContent = "Copied";
+  } catch {
+    btn.textContent = "Copy blocked — use Download";
+  }
+  setTimeout(() => (btn.textContent = "Copy log"), 1800);
+}
+
+function finish(won) {
+  closeEncounter(won ? "cleared" : "died");
+  document.getElementById("game").classList.add("hidden");
+  document.getElementById("over").classList.remove("hidden");
+  const where = encounter < ENCOUNTERS.length
+    ? `encounter ${encounter + 1} of ${ENCOUNTERS.length}`
+    : `endless wave ${encounter - ENCOUNTERS.length + 1}`;
+  document.getElementById("overTitle").textContent = won ? "The dragon is dead." : "You died.";
+  document.getElementById("overText").textContent = won
+    ? `You got through the whole thing on ${player.hp}/${player.maxHp} health.`
+    : `Killed in ${where}: ${encounterDef(encounter)[0]}.`;
+}
+
+/* ============================ input ============================ */
+
+let selected = null;   // persistent click-selection
+let pressAt = null;    // where a pointer went down, for drag detection
+
+const adjacent = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) === 1;
+
+/* Hit-test against the board's geometry rather than against whatever element
+   happens to be under the pointer. Element-based testing dropped every click
+   that landed in the 5px gap between gems, and dropped clicks whose gem got
+   replaced by a re-render mid-gesture. */
+function cellFromEvent(ev) {
+  const rect = document.getElementById("board").getBoundingClientRect();
+  const x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+  if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+  const clamp = v => Math.min(SIZE - 1, Math.max(0, v));
+  return [clamp(Math.floor(y / (rect.height / SIZE))), clamp(Math.floor(x / (rect.width / SIZE)))];
+}
+
+async function attemptSwap(r1, c1, r2, c2) {
+  if (busy || swipes <= 0) return;
+  busy = true;
+  document.getElementById("board").classList.add("resolving");
+  swapCells(r1, c1, r2, c2);
+  render(true);
+  await sleep(120);
+
+  if (special[r1][c1] && special[r2][c2]) {
+    swipes--;
+    doFuse(r1, c1, r2, c2);
+    render(true);
+    await sleep(160);
+    await resolveBoard();
+  } else if (!findMatches(board).length) {
+    swapCells(r1, c1, r2, c2);           // snaps back, costs nothing
+    render(true);
+  } else {
+    swipes--;
+    await resolveBoard();
+  }
+  busy = false;
+  document.getElementById("board").classList.remove("resolving");
+  afterAction();
+}
+
+function bindBoard() {
+  const el = document.getElementById("board");
+
+  el.addEventListener("pointerdown", ev => {
+    if (busy) return;
+    pressAt = cellFromEvent(ev);
+    if (pressAt) ev.preventDefault();
+  });
+
+  // Dragging across a boundary swaps immediately, without waiting for release.
+  el.addEventListener("pointermove", ev => {
+    if (!pressAt || busy) return;
+    const to = cellFromEvent(ev);
+    if (!to || !adjacent(pressAt, to)) return;
+    const from = pressAt;
+    pressAt = null; selected = null;
+    render();
+    attemptSwap(from[0], from[1], to[0], to[1]);
+  });
+
+  // A press and release on the same cell is a click, not a drag.
+  el.addEventListener("pointerup", ev => {
+    if (busy) { pressAt = null; return; }
+    const up = cellFromEvent(ev);
+    const down = pressAt;
+    pressAt = null;
+    if (!up || !down || up[0] !== down[0] || up[1] !== down[1]) { render(); return; }
+
+    if (!selected) selected = up;                                  // pick one up
+    else if (selected[0] === up[0] && selected[1] === up[1]) selected = null;   // put it back
+    else if (adjacent(selected, up)) {
+      const from = selected;
+      selected = null;
+      render();
+      attemptSwap(from[0], from[1], up[0], up[1]);
+      return;
+    } else selected = up;                                          // switch selection
+    render();
+  });
+
+  el.addEventListener("pointercancel", () => { pressAt = null; render(); });
+}
+
+/* ============================ render ============================ */
+
+let popped = new Set();
+function markPop(cells) { popped = new Set(cells.map(([r, c]) => key(r, c))); }
+
+/* What a colour effect will actually read as, mirroring applyEffect's maths
+   so the preview never promises a number the swap won't deliver. */
+function shownValue(effect, value) {
+  if (effect === "bleed") return Math.max(1, Math.floor(value / 4));
+  if (effect === "block" || effect === "splash" || effect === "lifesteal")
+    return Math.max(1, Math.floor(value / 2));
+  if (effect === "armour") return Math.max(1, Math.floor(value / 3));
+  return value;
+}
+
+/* The immediate result of one swap. Deliberately does NOT follow cascades --
+   the whole point is what you can count on, not what you might get lucky with. */
+function previewSwap(r1, c1, r2, c2) {
+  if (special[r1][c1] && special[r2][c2]) return { fuse: true };
+  swapCells(r1, c1, r2, c2);
+  const hits = findMatches(board).filter(m =>
+    m.cells.some(([r, c]) => (r === r1 && c === c1) || (r === r2 && c === c2)));
+  const out = hits.map(m => {
+    const effect = effectLabel(loadout, m.color);
+    if (effect === "wild_charge") {
+      // No ordinary effect -- the honest preview is "this many charges."
+      return {
+        icon: EFFECT_ICON.wild_charge,
+        value: m.cells.length,
+        leaves: MAKES_SPECIAL.has(m.shape) ? MARK[m.shape] : null,
+        trigger: loadout.shapes[m.shape] || null,
+      };
+    }
+    return {
+      icon: EFFECT_ICON[effect] || "?",
+      value: shownValue(effect, m.cells.length * PER_GEM),
+      leaves: MAKES_SPECIAL.has(m.shape) ? MARK[m.shape] : null,
+      trigger: loadout.shapes[m.shape] || null,
+    };
+  });
+  swapCells(r1, c1, r2, c2);
+  return out.length ? { matches: out } : null;
+}
+
+function previewLabel(p) {
+  if (p.fuse) return "FUSE";
+  return p.matches.map(m =>
+    m.icon + m.value + (m.leaves ? "→" + m.leaves : "")).join(" ");
+}
+
+function render(fresh) {
+  const el = document.getElementById("board");
+  el.innerHTML = "";
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) {
+    const d = document.createElement("div");
+    d.className = "gem " + board[r][c];
+    if (special[r][c]) d.classList.add("spec");
+    if (selected) {
+      if (selected[0] === r && selected[1] === c) d.classList.add("sel");
+      else if (adjacent(selected, [r, c])) {
+        d.classList.add("adj");
+        const p = previewSwap(selected[0], selected[1], r, c);
+        if (p) {
+          d.classList.add(p.fuse ? "willfuse" : "willmatch");
+          const tip = document.createElement("span");
+          tip.className = "tip";
+          tip.textContent = previewLabel(p);
+          d.appendChild(tip);
+          if (!p.fuse && p.matches.some(m => m.trigger)) tip.classList.add("trig");
+        }
+      }
+    }
+    if (popped.has(key(r, c))) d.classList.add("pop");
+    else if (fresh) d.classList.add("fresh");
+    d.dataset.r = r; d.dataset.c = c;
+    if (special[r][c]) {
+      const s = document.createElement("span");
+      s.className = "mark"; s.textContent = MARK[special[r][c]];
+      d.appendChild(s);
+    }
+    const ic = document.createElement("span");
+    ic.className = "icon";
+    ic.textContent = EFFECT_ICON[effectLabel(loadout, board[r][c])] || "";
+    d.appendChild(ic);
+    el.appendChild(d);
+  }
+  if (fresh) popped = new Set();
+
+  const q = id => document.getElementById(id);
+  q("hpTxt").textContent = `${Math.max(0, player.hp)} / ${player.maxHp}`;
+  q("hpBar").style.width = Math.max(0, (player.hp / player.maxHp) * 100) + "%";
+  q("manaTxt").textContent = player.mana;
+  q("manaBar").style.width = Math.min(100, (player.mana / 150) * 100) + "%";
+  q("blockTxt").textContent = player.block
+    + (player.armour ? `  +${player.armour} armour` : "")
+    + (player.shield ? `  +${player.shield} shield` : "");
+  q("swipeTxt").textContent = swipes;
+
+  // A build with no mana colour can never cast; don't show it a dead panel.
+  const casts = Object.values(loadout.colors).includes("mana");
+  document.getElementById("spellPanel").classList.toggle("hidden", !casts);
+  document.getElementById("manaRow").classList.toggle("hidden", !casts);
+  document.getElementById("manaBarRow").classList.toggle("hidden", !casts);
+
+  const buffs = [];
+  if (player.doubleNext) buffs.push("NEXT SPELL FIRES TWICE");
+  if (player.freeCasts) buffs.push(`${player.freeCasts} CAST(S) AT NO PRICE RISE`);
+  if (player.locusts) buffs.push(`${player.locusts} LOCUST(S) BANKED`);
+  if (player.wildCharges) buffs.push(`${player.wildCharges} WILD CHARGE (of ${loadout.wildChargeThreshold})`);
+  q("buffs").innerHTML = buffs.map(b => `<div class="buff">${b}</div>`).join("");
+
+  q("spells").innerHTML = availableSpells().map(n => {
+    const cost = spellCost(n);
+    const off = player.mana < cost ? "disabled" : "";
+    return `<button ${off} data-spell="${n}">${SPELLS[n].label}<small>${cost} mana</small><small>${SPELLS[n].note}</small></button>`;
+  }).join("");
+  q("spells").querySelectorAll("button").forEach(b =>
+    b.onclick = () => cast(b.dataset.spell));
+
+  q("enemies").innerHTML = enemies.map((e, i) => {
+    if (e.hp <= 0) return `<div class="enemy dead"><div class="top"><span>${e.name}</span><span>dead</span></div></div>`;
+    const now = e.countdown <= 1;
+    const tele = e.stunned
+      ? `stunned${e.stunned > 1 ? " x" + e.stunned : ""}`
+      : `${e.pending[0]} — ${e.pending[2]} dmg, ${now ? "NOW" : "in " + e.countdown}`
+        + (e.stunMeter ? ` [staggered ${e.stunMeter}/${e.resolve}]` : "");
+    return `<div class="enemy ${e === currentTarget() ? "target" : ""}" data-i="${i}">
+      <div class="top"><span>${e.name}${e.bleed ? `<span class="tag">bleed ${e.bleed}</span>` : ""}</span>
+      <span>${Math.max(0, e.hp)}/${e.maxHp}</span></div>
+      <div class="bar"><i style="width:${Math.max(0, (e.hp / e.maxHp) * 100)}%"></i></div>
+      <div class="tele ${now && !e.stunned ? "now" : ""}">${tele}</div></div>`;
+  }).join("");
+  q("enemies").querySelectorAll(".enemy[data-i]").forEach(d =>
+    d.onclick = () => { targetIdx = +d.dataset.i; render(); });
+
+  q("legend").innerHTML = COLORS.map(c => {
+    const eff = effectLabel(loadout, c) || "inert";
+    return `<span class="chip"><b style="color:var(--${c})">${EFFECT_ICON[eff] || ""}</b> ${eff.replace(/_/g, " ")}</span>`;
+  }).join(" ") + " &nbsp; " + Object.entries(loadout.shapes).map(([s, t]) =>
+    `<span class="chip">${MARK[s] || s} → ${t.replace(/_/g, " ")}</span>`).join(" ");
+}
+
+/* ============================ setup ============================ */
+
+function encounterDef(i) {
+  return i < ENCOUNTERS.length ? ENCOUNTERS[i]
+                               : endlessWave(i - ENCOUNTERS.length + 1);
+}
+
+function startEncounter() {
+  const [title, make] = encounterDef(encounter);
+  stats.encounters[encounter] = {
+    name: title, hpStart: player.hp, turnsAt: stats.turns, done: false,
+  };
+  enemies = make();
+  targetIdx = 0;
+  board = newBoard();
+  special = emptySpecials();
+  player.mana = 0;               // mana, armour and shield reset between combats
+  player.block = 0;
+  player.armour = 0;
+  player.shield = 0;
+  player.doubleNext = false;
+  player.freeCasts = 0;
+  player.locusts = 0;
+  player.wildCharges = 0;
+  swipes = SWIPES_PER_TURN;
+  castCount = 0;
+  document.getElementById("encName").textContent = title;
+  document.getElementById("encSub").textContent = encounter < ENCOUNTERS.length
+    ? `Encounter ${encounter + 1} of ${ENCOUNTERS.length} — ${loadout.name}`
+    : `ENDLESS — wave ${encounter - ENCOUNTERS.length + 1} — ${loadout.name}`;
+  log(`— ${title} —`, "turn");
+  render(true);
+}
+
+function begin(k) {
+  loadout = LOADOUTS[k];
+  player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
+             shield: 0, doubleNext: false, freeCasts: 0, locusts: 0, wildCharges: 0 };
+  encounter = 0;
+  document.getElementById("setup").classList.add("hidden");
+  document.getElementById("game").classList.remove("hidden");
+  bindBoard();
+  document.getElementById("endBtn").onclick = endTurn;
+  document.getElementById("refBtn").onclick = showReference;
+  for (const id of ["dlBtn", "dlBtn2"]) document.getElementById(id).onclick = downloadLog;
+  for (const id of ["cpBtn", "cpBtn2"]) {
+    const b = document.getElementById(id);
+    b.onclick = () => copyLog(b);
+  }
+  startEncounter();
+}
+
+document.getElementById("cards").innerHTML = Object.entries(LOADOUTS).map(([k, l]) => `
+  <div class="card" data-k="${k}">
+    <h3>${l.name} <span style="color:var(--dim);font-weight:400">${l.hp} hp</span></h3>
+    <p>${l.blurb}</p>
+    <div class="keyrow">${COLORS.map(c => {
+      const eff = effectLabel(l, c) || "inert";
+      return `<span class="chip"><b style="color:var(--${c})">${EFFECT_ICON[eff] || ""}</b> ${eff.replace(/_/g, " ")}</span>`;
+    }).join("")}</div>
+    <div class="keyrow">${Object.entries(l.shapes).map(([s, t]) =>
+      `<span class="chip">${MARK[s] || s} → ${t.replace(/_/g, " ")}</span>`).join("")}</div>
+  </div>`).join("");
+document.querySelectorAll(".card").forEach(c => c.onclick = () => begin(c.dataset.k));
+</script>
+</body>
+</html>
