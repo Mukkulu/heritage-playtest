@@ -340,6 +340,9 @@ const ARCHMAGE_BENEFICIAL_MISFIRE_CHANCE = 0.3;
 const SIZE_TIERS = ["lesser", "greater", "grand"];
 const sizeTier = len => (len >= 5 ? "grand" : len === 4 ? "greater" : "lesser");
 const isCross = shape => shape.endsWith("_cross");
+// L or T, any tier -- cross is excluded, it already has its own dedicated
+// fusion mechanics (whole board / colour bomb seeding).
+const isHard = shape => shape.endsWith("_L") || shape.endsWith("_T");
 // Strip the size tier so gear can still bind a trigger to plain L/T/cross
 // regardless of which tier fired -- size changes payout, never what gear does.
 const baseShape = shape =>
@@ -981,7 +984,7 @@ function doFuse(r1, c1, r2, c2) {
   const colours = new Set([board[r1][c1], board[r2][c2]]);
   special[r1][c1] = null; special[r2][c2] = null;
   stats.fusions++;
-  if (a === b) stats.combos++;
+  if (a === b || (isHard(a) && isHard(b))) stats.combos++;
   let blasted;
 
   if (isCross(a) && isCross(b)) {
@@ -1001,11 +1004,24 @@ function doFuse(r1, c1, r2, c2) {
       if (board[y][x] === hue) seeded.push([other, y, x]);
     log(`!! FUSION: cross + ${other} -- every ${hue} gem becomes a ${other} special (${seeded.length} of them)`, "combo");
     blasted = detonateAll(seeded);
+  } else if (isHard(a) && isHard(b)) {
+    // Any two hard-shape specials (L or T, any tier, matched or not) now
+    // get the escalated combo treatment -- not just an identical pair.
+    // Mismatched shapes resolve as whichever ranks higher, same "never
+    // worse than either half" rule as the cross+cross case.
+    const best = RANK.indexOf(a) >= RANK.indexOf(b) ? a : b;
+    const [cells, label] = comboBlast(best, r1, c1, r2, c2);
+    const detail = a === b ? "matched pair" : `${a} + ${b}, resolves as ${best}`;
+    log(`!! FUSION: two hard-shape specials (${detail}) -- ${label}`, "combo");
+    blasted = comboDetonate(best, colours, cells);
   } else if (a === b) {
+    // line4+line4 or line5+line5 -- unchanged matched-pair combo.
     const [cells, label] = comboBlast(a, r1, c1, r2, c2);
     log(`!! FUSION: two ${a} specials -- ${label}`, "combo");
     blasted = comboDetonate(a, colours, cells);
   } else {
+    // A hard shape mismatched with line4/line5 (or line4 vs line5) --
+    // unchanged: promotes to the stronger, ordinary double detonation.
     const best = RANK.indexOf(a) >= RANK.indexOf(b) ? a : b;
     log(`!! FUSION: ${a} + ${b} -- both detonate as ${best}`, "combo");
     blasted = detonateAll([[best, r1, c1], [best, r2, c2]]);
@@ -1301,10 +1317,10 @@ function showReference() {
 
   const combos = [
     ["4 + 4", "three whole rows"], ["5 + 5", "a 5x5 crater"],
-    ["L + L", "three whole columns"], ["T + T", "three rows AND three columns"],
+    ["any L/T + L/T", "escalated combo, widened blast -- doesn't need to match, resolves as whichever ranks higher"],
     ["+ + +", "the entire board"],
     ["+ + anything", "every gem of that colour becomes that special, all detonating"],
-    ["mismatched", "the weaker is promoted to the stronger, both detonate"],
+    ["4 or 5 vs. anything else", "mismatched -- the weaker is promoted to the stronger, both detonate ordinarily"],
   ].map(([a, b]) => `<tr><td class="m">${a}</td><td colspan="3">${b}</td></tr>`).join("");
 
   const div = document.createElement("div");
@@ -1359,7 +1375,7 @@ function buildReport() {
   L.push(`  total   ${String(total).padStart(4)}`);
   L.push("");
   L.push(`specials created ${stats.specials}`);
-  L.push(`fusions          ${stats.fusions} (matched-pair combos: ${stats.combos})`);
+  L.push(`fusions          ${stats.fusions} (escalated combos: ${stats.combos})`);
   L.push(`spells cast      ${Object.keys(stats.spells).length
     ? Object.entries(stats.spells).map(([k, v]) => k + " x" + v).join(", ") : "none"}`);
   L.push("");
