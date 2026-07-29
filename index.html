@@ -35,8 +35,21 @@
     padding: 14px 16px; cursor: pointer; transition: border-color .15s, transform .1s;
   }
   .card:hover { border-color: #55607a; transform: translateY(-2px); }
+  .card.selected { border-color: #7fa6ff; box-shadow: 0 0 0 1px #7fa6ff inset; }
   .card h3 { margin: 0 0 4px; font-size: 16px; }
   .card p { margin: 0 0 10px; color: var(--dim); font-size: 13px; }
+  .intro { color: var(--dim); font-size: 13.5px; max-width: 780px; margin: 0 0 20px; }
+  .section-h { margin: 22px 0 8px; font-size: 13px; text-transform: uppercase;
+    letter-spacing: .6px; color: var(--dim); }
+  .cards.sets { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .cards.sets .card { padding: 10px 14px; }
+  .cards.sets .card h3 { font-size: 14px; }
+  .cards.sets .card p { font-size: 12px; margin-bottom: 0; }
+  .beginbtn {
+    display: block; width: 100%; margin: 18px 0; padding: 12px; font-size: 15px; font-weight: 700;
+    background: #3a5fd9; color: #fff; border: none; border-radius: 10px; cursor: pointer;
+  }
+  .beginbtn:disabled { background: var(--panel2); color: var(--dim); cursor: not-allowed; }
   .keyrow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
   .chip {
     font-size: 12px; padding: 2px 8px; border-radius: 20px;
@@ -172,7 +185,25 @@
   <div id="setup">
     <h1>Match-3 Combat Prototype</h1>
     <div class="sub">Same four colours, three completely different games. Pick one.</div>
-    <div class="cards" id="cards"></div>
+    <p class="intro">
+      You're a blacksmith's heir clearing a dungeon, one fight at a time. Pick a
+      <b>class</b> below — it decides what each gem colour does when you match it (damage,
+      blocking, healing, casting...). Every fight is a match-3 board: swap gems to trigger your
+      colours, and chain bigger shapes (four-in-a-rows, L's, T's, crosses) for bigger payoffs.
+      Optionally bolt on a <b>tier piece</b> too — it bends your class's rules further. Five
+      fights, health carries between them, no healing in between — see how far you get.
+    </p>
+
+    <h3 class="section-h">1. Choose a class</h3>
+    <div class="cards" id="classCards"></div>
+
+    <h3 class="section-h">2. Tier piece (optional)</h3>
+    <div class="cards sets" id="setCards"></div>
+
+    <div class="hint" id="setupPreview"></div>
+
+    <button class="beginbtn" id="beginBtn" disabled>Choose a class to begin</button>
+
     <div class="hint">
       Drag a gem into its neighbour to swap. A swap that makes no match snaps back and costs nothing.
       Three committed swipes per turn. Health carries between fights; mana resets.
@@ -297,7 +328,13 @@ const SPELLS = {
   thunder: { cost: 90, label: "Thunder", note: "12 to all" },
 };
 
-const LOADOUTS = {
+// A CLASS defines the base colour/shape bindings and hp -- the character-
+// creation layer. A SET (tier piece, optional) layers on top: it can rebind
+// a colour (colorOverrides -- null removes an effect entirely, e.g.
+// Archmage's blue) and/or add an autonomous mechanic. Shape triggers always
+// come from the class -- kept deliberately origin-free so build-crafting
+// via sets never touches the specials/fusion mechanics.
+const CLASSES = {
   warden: {
     name: "Warden", hp: 60, spellCost: 1,
     blurb: "No spells at all. Green blocks for a turn, blue is armour that keeps.",
@@ -316,47 +353,70 @@ const LOADOUTS = {
     colors: { R: "mana", G: "block", Y: "attack", B: "mana" },
     shapes: { line4: "free_cast", cross: "double_next_spell" },
   },
-  // Pharaoh's Curse -- 2pc rebinds green to lifesteal (same mechanic as
-  // Bleeder's blue, overheal capped into a shield at half max HP). 4pc:
-  // every green gem that pays out (base match, blast-caught, or
-  // fusion-combo-caught) breeds one locust; locusts bite a random living
+};
+
+const SETS = {
+  // 2pc rebinds green to lifesteal (same mechanic as Bleeder's blue,
+  // overheal capped into a shield at half max HP) on whichever class you
+  // picked. 4pc: every green gem that pays out (base match, blast-caught,
+  // or fusion-combo-caught) breeds one locust; locusts bite a random living
   // enemy for 1 each at end of turn, then reset to zero.
   pharaoh: {
-    name: "Pharaoh's Curse", hp: 55, spellCost: 1,
-    blurb: "2pc: green heals into a shield, like Bleeder's blue. 4pc: every green gem matched also breeds a locust that bites something at turn's end.",
-    colors: { R: "attack", G: "lifesteal", Y: "splash", B: "block" },
-    shapes: { line4: "cleave", L: "stun" },
+    name: "Pharaoh's Curse",
+    blurb: "2pc: green heals into a shield. 4pc: every green gem matched also breeds a locust that bites something at turn's end.",
+    colorOverrides: { G: "lifesteal" },
     locustColor: "G",
   },
-  // Cascading Custodian -- colour-independent, no colour rebind at all.
-  // Fires automatically after every swipe resolves, regardless of what
-  // colour was matched. 2pc: +1 damage per match beyond the first in that
-  // swipe's full cascade. 4pc: the strike repeats once more per
-  // CUSTODIAN_GEMS_PER_STRIKE gems matched beyond the first match; re-fetches
-  // target each repeat so a mid-burst kill rolls onto the next enemy.
+  // Colour-independent, no colour rebind at all. Fires automatically after
+  // every swipe resolves, regardless of what colour was matched or what
+  // class you're running. 2pc: +1 damage per match beyond the first in
+  // that swipe's full cascade. 4pc: the strike repeats once more per
+  // CUSTODIAN_GEMS_PER_STRIKE gems matched beyond the first match.
   custodian: {
-    name: "Cascading Custodian", hp: 50, spellCost: 1,
+    name: "Cascading Custodian",
     blurb: "2pc: every swipe autonomously strikes for +1 per match beyond the first, no input needed. 4pc: that strike repeats once more per " + CUSTODIAN_GEMS_PER_STRIKE + " gems matched beyond the first match.",
-    colors: { R: "attack", G: "block", Y: "splash", B: "armour" },
-    shapes: { line4: "cleave", L: "stun" },
     cascadeBonus: true,
   },
-  // Archmage of Chaos -- blue has NO direct effect at all (deliberately):
-  // its whole identity is building "wild charge", which pays off as a free
-  // random spell at end_turn once the threshold is crossed (MTG storm /
-  // Yogg-Saron flavour). A chaos-fired heal can misfire onto a random
-  // living enemy instead of the player -- a deliberate player cast never
-  // does. Drop "heal" from `spells` to remove that risk entirely.
+  // Strips whatever the class had bound to blue (colorOverrides.B = null)
+  // and replaces it with pure wild-charge building -- blue has NO direct
+  // effect at all under this set, deliberately. Pays off as a free random
+  // spell at end_turn once the threshold is crossed (MTG storm / Yogg-Saron
+  // flavour). A chaos-fired heal can misfire onto a random living enemy
+  // instead of the player -- a deliberate player cast never does.
   archmage: {
-    name: "Archmage of Chaos", hp: 48, spellCost: 1,
-    blurb: "Blue does nothing on its own -- it builds wild charge. At 5 charges (4pc; 2pc alone would need 10), a free random spell fires automatically at end of turn. No mana cost, no aim -- and a chaos-fired heal can land on an enemy instead of you.",
-    colors: { R: "attack", G: "block", Y: "splash" },
-    shapes: { line4: "cleave", L: "stun" },
+    name: "Archmage of Chaos",
+    blurb: "Blue does nothing on its own -- it builds wild charge. At 5 charges, a free random spell fires automatically at end of turn. No mana cost, no aim -- and a chaos-fired heal can land on an enemy instead of you.",
+    colorOverrides: { B: null },
     spells: ["heal", "fire", "thunder"],
     wildChargeColor: "B",
     wildChargeThreshold: 5,
   },
 };
+
+function buildLoadout(classKey, setKey) {
+  const base = CLASSES[classKey];
+  const set = setKey ? SETS[setKey] : null;
+  const colors = Object.assign({}, base.colors);
+  if (set && set.colorOverrides) {
+    for (const c of Object.keys(set.colorOverrides)) {
+      const eff = set.colorOverrides[c];
+      if (eff === null) delete colors[c]; else colors[c] = eff;
+    }
+  }
+  return {
+    name: set ? `${base.name} — ${set.name}` : base.name,
+    blurb: set ? `${base.blurb} ${set.blurb}` : base.blurb,
+    hp: base.hp,
+    spellCost: base.spellCost,
+    colors,
+    shapes: base.shapes,
+    spells: set ? set.spells : undefined,
+    locustColor: set ? set.locustColor : undefined,
+    wildChargeColor: set ? set.wildChargeColor : undefined,
+    wildChargeThreshold: set ? set.wildChargeThreshold : undefined,
+    cascadeBonus: !!(set && set.cascadeBonus),
+  };
+}
 
 /* Sized against a HUMAN, not the random-play simulator. Re-sized a second time
    after logged runs measured 110-170 damage a turn (the first pass assumed
@@ -1456,8 +1516,8 @@ function startEncounter() {
   render(true);
 }
 
-function begin(k) {
-  loadout = LOADOUTS[k];
+function begin(classKey, setKey) {
+  loadout = buildLoadout(classKey, setKey);
   player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
              shield: 0, doubleNext: false, freeCasts: 0, locusts: 0, wildCharges: 0 };
   encounter = 0;
@@ -1474,8 +1534,12 @@ function begin(k) {
   startEncounter();
 }
 
-document.getElementById("cards").innerHTML = Object.entries(LOADOUTS).map(([k, l]) => `
-  <div class="card" data-k="${k}">
+/* ============================ setup screen ============================ */
+
+let pickedClass = null, pickedSet = null;
+
+function classCardHtml(k, l) {
+  return `<div class="card" data-k="${k}">
     <h3>${l.name} <span style="color:var(--dim);font-weight:400">${l.hp} hp</span></h3>
     <p>${l.blurb}</p>
     <div class="keyrow">${COLORS.map(c => {
@@ -1484,8 +1548,53 @@ document.getElementById("cards").innerHTML = Object.entries(LOADOUTS).map(([k, l
     }).join("")}</div>
     <div class="keyrow">${Object.entries(l.shapes).map(([s, t]) =>
       `<span class="chip">${MARK[s] || s} → ${t.replace(/_/g, " ")}</span>`).join("")}</div>
-  </div>`).join("");
-document.querySelectorAll(".card").forEach(c => c.onclick = () => begin(c.dataset.k));
+  </div>`;
+}
+
+function setCardHtml(k, s) {
+  return `<div class="card" data-k="${k}">
+    <h3>${s.name}</h3>
+    <p>${s.blurb}</p>
+  </div>`;
+}
+
+function renderSetupPreview() {
+  const el = document.getElementById("setupPreview");
+  if (!pickedClass) { el.textContent = ""; return; }
+  const l = buildLoadout(pickedClass, pickedSet);
+  el.innerHTML = `<b>${l.name}</b> (${l.hp} hp) &nbsp; ` + COLORS.map(c => {
+    const eff = effectLabel(l, c) || "inert";
+    return `<span class="chip"><b style="color:var(--${c})">${EFFECT_ICON[eff] || ""}</b> ${eff.replace(/_/g, " ")}</span>`;
+  }).join(" ");
+}
+
+function refreshSetupSelection() {
+  document.querySelectorAll("#classCards .card").forEach(c =>
+    c.classList.toggle("selected", c.dataset.k === pickedClass));
+  document.querySelectorAll("#setCards .card").forEach(c =>
+    c.classList.toggle("selected", c.dataset.k === pickedSet));
+  const btn = document.getElementById("beginBtn");
+  btn.disabled = !pickedClass;
+  btn.textContent = pickedClass ? "Begin the dungeon" : "Choose a class to begin";
+  renderSetupPreview();
+}
+
+document.getElementById("classCards").innerHTML =
+  Object.entries(CLASSES).map(([k, l]) => classCardHtml(k, l)).join("");
+document.getElementById("setCards").innerHTML =
+  Object.entries(SETS).map(([k, s]) => setCardHtml(k, s)).join("");
+
+document.querySelectorAll("#classCards .card").forEach(c => c.onclick = () => {
+  pickedClass = c.dataset.k;
+  refreshSetupSelection();
+});
+document.querySelectorAll("#setCards .card").forEach(c => c.onclick = () => {
+  pickedSet = pickedSet === c.dataset.k ? null : c.dataset.k; // click again to deselect
+  refreshSetupSelection();
+});
+document.getElementById("beginBtn").onclick = () => {
+  if (pickedClass) begin(pickedClass, pickedSet);
+};
 </script>
 </body>
 </html>
