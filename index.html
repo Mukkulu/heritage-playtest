@@ -1567,10 +1567,15 @@ async function endTurn() {
     for (let i = 0; i < fires; i++) {
       const name = pick(availableSpells());
       // Chain-gem spell buffs empower a wild-charge cast exactly like a
-      // manual one -- not just mana-cost casts.
+      // manual one -- not just mana-cost casts. Note this SPENDS them, same
+      // as a manual cast would -- an autofire can consume a banked buff you
+      // were saving for your own next cast, which reads as "it just
+      // vanished" if you don't notice the log line explaining why.
+      const spentBuff = player.doubleNext || player.spellBuffStacks > 0;
       const factor = consumeSpellBuffs();
       const result = resolveSpellEffect(name, factor, true);
-      log(`wild charge erupts -- ${name}: ${result.text}`, result.cls);
+      log(`wild charge erupts -- ${name}: ${result.text}`
+        + (spentBuff ? " (spent your banked spell buff)" : ""), result.cls);
     }
   }
 
@@ -2198,12 +2203,15 @@ function startEncounter() {
   player.shield = 0;
   player.locusts = 0;
   player.wildCharges = 0;
-  player.dodgeStacks = 0;        // turn-scoped, not banked -- unlike dodgeCharges below
-  // doubleNext, spellBuffStacks, doubleNextSwipe, nextSpellFree, and banked
-  // dodgeCharges are NOT reset here -- they're banked until actually spent,
-  // same as within a fight, so a stack earned right as the last enemy dies
-  // survives into the next encounter instead of being wasted. Matches the
-  // Python build, which never reset these between encounters either.
+  player.doubleNext = false;
+  player.spellBuffStacks = 0;
+  player.doubleNextSwipe = false;
+  player.nextSpellFree = false;
+  player.dodgeStacks = 0;
+  player.dodgeCharges = 0;
+  // Confirmed by the designer (2026-07-31): these reset per encounter, not
+  // just per turn -- a banked buff persists across End Turn presses within
+  // one fight, but does not carry into the next one.
   swipes = SWIPES_PER_TURN;
   document.getElementById("encName").textContent = title;
   document.getElementById("encSub").textContent = encounter < ENCOUNTERS.length
