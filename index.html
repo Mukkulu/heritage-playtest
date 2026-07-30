@@ -82,6 +82,67 @@
   }
   .chip b { font-weight: 700; }
 
+  /* ---------- gem legend row (above the board) ---------- */
+  /* One box per colour saying what a match of it actually pays, plus a
+     Combos box whose tooltip lists every chain-gem pairing. Tinted from the
+     existing --R/--G/--Y/--B rather than saturated, so it sits in the dark
+     theme instead of shouting over it. */
+  .gemrow {
+    display: grid; gap: 8px; margin-bottom: 12px;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  }
+  @media (max-width: 620px) {
+    .gemrow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  .gembox {
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px;
+    background: var(--panel2); min-width: 0;
+  }
+  .gembox.R { background: rgba(224, 84, 78, .13); border-color: rgba(224, 84, 78, .55); }
+  .gembox.G { background: rgba(76, 179, 119, .13); border-color: rgba(76, 179, 119, .55); }
+  .gembox.Y { background: rgba(223, 177, 58, .13); border-color: rgba(223, 177, 58, .55); }
+  .gembox.B { background: rgba(74, 142, 222, .13); border-color: rgba(74, 142, 222, .55); }
+  .gembox .top {
+    display: flex; align-items: baseline; gap: 6px;
+    font-size: 13.5px; font-weight: 700; line-height: 1.2;
+  }
+  .gembox .g { font-size: 16px; }
+  .gembox .rates {
+    margin-top: 3px; font-size: 11.5px; color: var(--dim);
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .gembox.inert .top { color: var(--dim); }
+
+  /* Combos: same box, but its tooltip is the whole point */
+  .combobox {
+    position: relative; cursor: help; margin-left: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 13.5px; padding: 7px 14px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel2);
+  }
+  .combobox:hover { border-color: #5b6580; }
+  .combobox .arrow { color: var(--dim); font-weight: 400; margin-left: 6px; font-size: 11px; }
+  .combotip {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
+    display: none; width: max-content; max-width: min(560px, 88vw);
+    background: #0c0e13; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; cursor: default;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .55);
+  }
+  .combobox:hover .combotip, .combobox:focus-within .combotip { display: block; }
+  .combotip h4 {
+    margin: 0 0 8px; font-size: 12px; color: var(--dim);
+    text-transform: uppercase; letter-spacing: .6px; font-weight: 600;
+  }
+  .combotip table { border-collapse: collapse; font-size: 12.5px; }
+  .combotip td { padding: 3px 8px 3px 0; vertical-align: top; white-space: nowrap; }
+  .combotip td.pair { font-weight: 700; font-family: ui-monospace, Consolas, monospace; }
+  .combotip td.eff { white-space: normal; color: var(--text); }
+  .combotip td.w { color: var(--dim); font-variant-numeric: tabular-nums; text-align: right; }
+  .combotip tr.hot td.w { color: #f0cf78; font-weight: 700; }
+  .combotip .foot { margin: 9px 0 0; font-size: 11.5px; color: var(--dim); max-width: 46ch; white-space: normal; }
+
   /* ---------- game layout ---------- */
   .game { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr) 330px; align-items: start; }
   @media (max-width: 860px) { .game { grid-template-columns: 1fr; } }
@@ -266,6 +327,7 @@
     <div class="sub" id="encSub"></div>
     <div class="game">
       <div class="boardwrap">
+        <div class="gemrow" id="gemrow"></div>
         <div id="board"></div>
         <div class="hint" id="legend"></div>
       </div>
@@ -1744,6 +1806,68 @@ function previewLabel(p) {
     m.icon + m.value + (m.leaves ? "→" + m.leaves : "")).join(" ");
 }
 
+/* One box per gem colour: what a match of it actually pays, at match sizes
+   3/4/5. Numbers come from shownValue(), the same function the swap predictor
+   uses, which mirrors applyEffect exactly -- so the row can never promise a
+   figure the game will not deliver. */
+let gemRowSig = null;
+function renderGemRow() {
+  // render() runs on every cascade step. Replacing innerHTML would kill the
+  // Combos hover mid-animation, so only rebuild when the loadout changes.
+  const sig = COLORS.map(c => effectLabel(loadout, c)).join("|");
+  if (sig === gemRowSig) return;
+  gemRowSig = sig;
+
+  const cells = COLORS.map(c => {
+    const eff = effectLabel(loadout, c);
+    if (!eff) {
+      return `<div class="gembox inert ${c}"><div class="top">`
+        + `<span class="g">-</span><span>inert</span></div>`
+        + `<div class="rates">no effect bound</div></div>`;
+    }
+    const rate = n => shownValue(eff, n * PER_GEM);
+    const desc = (EFFECT_DESC[eff] || "").replace(/"/g, "&quot;");
+    return `<div class="gembox ${c}" title="${eff.replace(/_/g, " ")} -- ${desc}">`
+      + `<div class="top"><span class="g" style="color:var(--${c})">`
+      + `${EFFECT_ICON[eff] || "?"}</span><span>${eff.replace(/_/g, " ")}</span></div>`
+      + `<div class="rates">3 gems ${rate(3)} &middot; 4 ${rate(4)} &middot; 5 ${rate(5)}</div></div>`;
+  }).join("");
+
+  document.getElementById("gemrow").innerHTML = cells + comboBoxHTML();
+}
+
+/* The Combos tooltip. Labels are generated by calling the REAL blast
+   functions, so this can never drift from what a fusion actually does. */
+function comboBoxHTML() {
+  const rep = { line4: "line4", line5: "line5", L: "lesser_L", T: "lesser_T" };
+  const shown = { line4: "4", line5: "5", L: "L", T: "T" };
+  const pairs = Object.keys(FUSION_AVAILABILITY)
+    .sort((a, b) => FUSION_AVAILABILITY[b] - FUSION_AVAILABILITY[a]);
+
+  const rows = pairs.map(k => {
+    const [fa, fb] = k.split("|");
+    const a = rep[fa], b = rep[fb];
+    let label;
+    if (fa === fb) label = comboBlast(a, 3, 3, 3, 4)[1];
+    else label = mixedBlast(a, b, 3, 3, 3, 4)[1];
+    if (fa === fb && fa === "line5") label += ", and ignites every other special";
+    const w = fusionRarityMult(fa, fb);
+    return `<tr class="${w >= 2 ? "hot" : ""}">`
+      + `<td class="pair">${shown[fa]} + ${shown[fb]}</td>`
+      + `<td class="eff">${label}</td>`
+      + `<td class="w">&times;${w}</td></tr>`;
+  }).join("");
+
+  return `<div class="combobox" tabindex="0">Combos<span class="arrow">&#9662;</span>
+    <div class="combotip">
+      <h4>Swipe two special gems together</h4>
+      <table>${rows}</table>
+      <p class="foot">Rarer pairings pay more &mdash; the multiplier is derived from
+      how often the board actually offers each one. Tier (L&prime;, T&Prime;) raises the
+      payout, never the blast size.</p>
+    </div></div>`;
+}
+
 function render(fresh) {
   const el = document.getElementById("board");
   // A friend of the designer's playtest feedback: nothing signalled you were
@@ -1834,10 +1958,10 @@ function render(fresh) {
   q("enemies").querySelectorAll(".enemy[data-i]").forEach(d =>
     d.onclick = () => { targetIdx = +d.dataset.i; render(); });
 
-  q("legend").innerHTML = COLORS.map(c => {
-    const eff = effectLabel(loadout, c) || "inert";
-    return `<span class="chip"><b style="color:var(--${c})">${EFFECT_ICON[eff] || ""}</b> ${eff.replace(/_/g, " ")}</span>`;
-  }).join(" ") + " &nbsp; " + Object.entries(loadout.shapes).map(([s, t]) =>
+  renderGemRow();
+  // Colours moved up into the gem row, so this line now carries only the
+  // shape triggers -- no duplication.
+  q("legend").innerHTML = Object.entries(loadout.shapes).map(([s, t]) =>
     `<span class="chip">${MARK[s] || s} → ${t.replace(/_/g, " ")}</span>`).join(" ");
 }
 
