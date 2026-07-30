@@ -338,6 +338,9 @@
 
       <h3 class="section-h">Hard-shape gem — your rare payoff trigger</h3>
       <div class="cards mini" id="gemHard"></div>
+
+      <h3 class="section-h">Line5 gem (optional) — your rarest payoff, only fires on a 5-fusion</h3>
+      <div class="cards mini" id="gemLine5"></div>
     </div>
 
     <h3 class="section-h">Tier piece (optional)</h3>
@@ -430,7 +433,36 @@ const SPECIAL_GEMS = 5;
 // easing its cost -- replaced the old escalating-price / free_cast
 // mechanic (the designer found it confusing). Fraction bonus per banked
 // stack; meant to be scalable through gear later (flat constant for now).
-const LINE4_SPELL_BUFF = 0.5;
+// Retuned 2026-07-30 per playtest follow-up: was 0.5/uncapped, now 0.25
+// with a hard cap -- stacking indefinitely at +50% each was too easy to
+// run away with.
+const LINE4_SPELL_BUFF = 0.25;
+const SPELL_BUFF_MAX_STACKS = 10;
+
+// New chain-gem powers (2026-07-30). All placeholders pending real
+// playtest logs, same as every other numeric constant in this file.
+const COLOR_BOOST_FLAT = 10;       // 4chain "color_boost": flat bonus to the chain's own colour
+const ALL_COLOR_BOOST_FLAT = 3;    // 4chain "all_color_boost": flat bonus to every bound colour
+const DODGE_STACKS_THRESHOLD = 3;  // Lchain/Tchain "dodge": stacks needed to bank one dodge
+// "wildcard" is bound to the NEW line5 socket, not L/T -- see LINE5_GEMS.
+// Fires on any line5 fusion with a genuinely different family (line4/L/T):
+// the OTHER half of the fusion detonates one MORE time, at
+// WILDCARD_POWER_MULT its normal value.
+//
+// First version (2026-07-30) converted every board gem of the other half's
+// colour into that shape and detonated them all at once, damped to 40%
+// value -- measured via a greedy-fusion simulation (1000 simulated 10-turn
+// encounters): 27.6% of encounters saw the fusion at all, and 5.4%
+// produced a 5+ stack of a repeating trigger like stun in ONE swipe
+// (bimodal: either 0-4 stacks or 20-39, because it's however many board
+// cells happened to be that colour). Damping only reduced damage VALUE,
+// not trigger COUNT, so a stun/dodge-bound L or T could fire dozens of
+// times off one fusion (37 stacks observed once). Replaced same-day with
+// this single-proc version -- bounded to exactly one extra trigger fire,
+// so a non-scaling trigger like stun or dodge only ever gains one stack
+// from it, same as an ordinary detonation, just a bigger number for
+// anything that DOES scale with value.
+const WILDCARD_POWER_MULT = 5;
 
 // Cascading Custodian (colour-independent -- fires on every swipe). Both
 // placeholders pending real playtest logs.
@@ -490,8 +522,17 @@ const TRIGGER_DESC = {
   stun: "target loses its next action; spills onto an unstunned enemy",
   bleed_burst: "a lump of extra bleed stacks",
   bleed_detonate: "consumes the biggest bleed on the field for 3x as instant damage",
-  spell_buff: `your next spell hits ${Math.round(LINE4_SPELL_BUFF * 100)}% harder (stacks, banked until spent)`,
+  spell_buff: `your next spell hits ${Math.round(LINE4_SPELL_BUFF * 100)}% harder `
+    + `(stacks up to ${SPELL_BUFF_MAX_STACKS}, banked until spent)`,
   double_next_spell: "your next spell fires twice",
+  color_boost: `adds a flat +${COLOR_BOOST_FLAT} to this chain's own colour effect`,
+  all_color_boost: `adds a flat +${ALL_COLOR_BOOST_FLAT} to EVERY colour effect you have bound`,
+  double_next_swipe: "your next swipe's payout is doubled (banked until spent)",
+  free_spell: "your next spell cast costs no mana (banked until spent, does not stack)",
+  bleed_spike: "instantly deals the biggest bleed's damage again, WITHOUT consuming the stacks",
+  dodge: `gain a stack; at ${DODGE_STACKS_THRESHOLD} stacks (within a turn) bank one fully-dodged attack`,
+  wildcard: `on a line5 fusion with any OTHER chain gem: that other half detonates one `
+    + `more time, at ${WILDCARD_POWER_MULT}x its normal value`,
 };
 
 const BLAST_DESC = {
@@ -571,12 +612,31 @@ const LINE4_GEMS = {
   cleave: "cleave",
   bleed_burst: "bleed_burst",
   spell_buff: "spell_buff",
+  color_boost: "color_boost",
+  all_color_boost: "all_color_boost",
 };
+// New (2026-07-30) hard-shape powers: kept bundled the same way as the
+// existing three (one pick = one shape + one trigger), just added twice --
+// once for L, once for T -- rather than decoupling shape from trigger.
 const HARD_SHAPE_GEMS = {
   stun_L: { shape: "L", trigger: "stun" },
   bleed_detonate_T: { shape: "T", trigger: "bleed_detonate" },
   double_spell_T: { shape: "T", trigger: "double_next_spell" },
+  double_swipe_L: { shape: "L", trigger: "double_next_swipe" },
+  double_swipe_T: { shape: "T", trigger: "double_next_swipe" },
+  free_spell_L: { shape: "L", trigger: "free_spell" },
+  free_spell_T: { shape: "T", trigger: "free_spell" },
+  bleed_spike_L: { shape: "L", trigger: "bleed_spike" },
+  bleed_spike_T: { shape: "T", trigger: "bleed_spike" },
+  dodge_L: { shape: "L", trigger: "dodge" },
+  dodge_T: { shape: "T", trigger: "dodge" },
 };
+// line5 gets its own pickable trigger for the first time -- previously it
+// only paid the flat shape multiplier plus whatever mixedBlast pattern its
+// fusion partner defined, with no gear hook of its own. Only one option so
+// far (same situation Yellow's GEM_POOLS was already left in -- a known
+// gap, not a bug).
+const LINE5_GEMS = { wildcard: "wildcard" };
 
 // HP no longer comes from a class archetype now that colours are picked
 // independently -- flat placeholder until there's a real answer for what
@@ -653,6 +713,7 @@ function buildLoadout(picks, setKey) {
   }
   const hardGem = HARD_SHAPE_GEMS[picks.hard];
   const shapes = { line4: picks.line4, [hardGem.shape]: hardGem.trigger };
+  if (picks.line5) shapes.line5 = picks.line5;
   return {
     name: set ? `Custom build — ${set.name}` : "Custom build",
     blurb: set ? set.blurb : "Crafted from your own recipe book, one gem per socket.",
@@ -713,6 +774,7 @@ function endlessWave(n) {
 
 let board, special, loadout;
 let player, enemies, targetIdx, encounter, swipes, busy = false;
+let valueMult = 1;  // Lchain/Tchain "double_next_swipe" -- 2 for one swipe's resolution, else 1
 
 const rnd = n => Math.floor(Math.random() * n);
 const pick = a => a[rnd(a.length)];
@@ -951,7 +1013,15 @@ function stunTarget() {
   return [cur, false];
 }
 
-function fireTrigger(trigger, value, tag) {
+/* `color` is the detonating gem's own colour (needed by color_boost).
+   `otherShape`/`otherColor` describe the OTHER half of a fusion when this
+   trigger fired as part of one (needed by wildcard) -- both are null
+   outside a mismatched fusion, including a same-family line5 fusion, which
+   deliberately does NOT feed wildcard its own shape (that would let a
+   converted line5 re-trigger wildcard on detonation and recurse forever).
+   Returns an array of extra [r, c] cells cleared as a side effect (only
+   wildcard produces any) so callers can fold them into their own collapse. */
+function fireTrigger(trigger, value, tag, color, otherShape, otherColor) {
   const t = currentTarget();
   if (trigger === "stun") {
     const [victim, redirected] = stunTarget();
@@ -1003,13 +1073,70 @@ function fireTrigger(trigger, value, tag) {
       log(`>> ${tag} TRIGGER: cleave hits ${ts.length} for ${each}`, "spec");
     }
   } else if (trigger === "spell_buff") {
-    player.spellBuffStacks += 1;
     const pct = Math.round(LINE4_SPELL_BUFF * 100);
-    log(`>> ${tag} TRIGGER: next spell +${pct}% (${player.spellBuffStacks} banked)`, "spec");
+    if (player.spellBuffStacks < SPELL_BUFF_MAX_STACKS) {
+      player.spellBuffStacks += 1;
+      log(`>> ${tag} TRIGGER: next spell +${pct}% (${player.spellBuffStacks}/${SPELL_BUFF_MAX_STACKS} banked)`, "spec");
+    } else {
+      log(`>> ${tag} TRIGGER: next spell +${pct}% (already at max ${SPELL_BUFF_MAX_STACKS})`, "spec");
+    }
   } else if (trigger === "double_next_spell") {
     player.doubleNext = true;
     log(`>> ${tag} TRIGGER: next spell fires twice`, "spec");
+  } else if (trigger === "color_boost") {
+    const eff = color ? loadout.colors[color] : null;
+    if (eff) applyEffect(eff, COLOR_BOOST_FLAT, `${tag} chain-colour boost`);
+  } else if (trigger === "all_color_boost") {
+    for (const col of Object.keys(loadout.colors).sort()) {
+      applyEffect(loadout.colors[col], ALL_COLOR_BOOST_FLAT, `${tag} all-colour boost (${col})`);
+    }
+  } else if (trigger === "double_next_swipe") {
+    player.doubleNextSwipe = true;
+    log(`>> ${tag} TRIGGER: next swipe doubled`, "spec");
+  } else if (trigger === "free_spell") {
+    player.nextSpellFree = true;
+    log(`>> ${tag} TRIGGER: next spell cast free`, "spec");
+  } else if (trigger === "bleed_spike") {
+    // Same payoff as bleed_detonate but the bleed stacks are NOT consumed --
+    // an instant spike on top of the DoT rather than a replacement for it.
+    const bleeding = living().filter(e => e.bleed);
+    if (bleeding.length) {
+      const v = bleeding.reduce((a, b) => (b.bleed > a.bleed ? b : a));
+      const burst = v.bleed * 3;
+      v.hp -= burst;
+      log(`>> ${tag} TRIGGER: ${v.name}'s ${v.bleed} bleed spikes for ${burst} (stacks kept)`, "spec");
+    } else if (t) {
+      const s = Math.max(2, Math.floor(value / 3));
+      t.bleed += s;
+      log(`>> ${tag} TRIGGER: nothing to spike — opens ${s} bleed instead`, "spec");
+    }
+  } else if (trigger === "dodge") {
+    player.dodgeStacks += 1;
+    if (player.dodgeStacks >= DODGE_STACKS_THRESHOLD) {
+      player.dodgeStacks -= DODGE_STACKS_THRESHOLD; // overflow carries, not wasted
+      player.dodgeCharges += 1;
+      log(`>> ${tag} TRIGGER: dodge ready! next attack will miss (${player.dodgeCharges} banked)`, "spec");
+    } else {
+      log(`>> ${tag} TRIGGER: dodge stack ${player.dodgeStacks}/${DODGE_STACKS_THRESHOLD}`, "spec");
+    }
+  } else if (trigger === "wildcard") {
+    // Only fires on a genuinely mismatched fusion (see comment above) -- the
+    // OTHER half detonates one more time, at WILDCARD_POWER_MULT its normal
+    // value. Bounded to exactly one extra proc: a non-scaling trigger
+    // (stun, dodge) only ever gains one stack from this, same as an
+    // ordinary detonation would.
+    if (!(otherShape && SHAPE_MULT[otherShape] !== undefined)) return [];
+    const boosted = Math.floor(SPECIAL_GEMS * PER_GEM * SHAPE_MULT[otherShape] * WILDCARD_POWER_MULT);
+    const wtag = `${tag} wildcard x${WILDCARD_POWER_MULT}`;
+    if (otherColor) {
+      const eff = loadout.colors[otherColor];
+      if (eff) applyEffect(eff, boosted, wtag);
+    }
+    const otherTrigger = loadout.shapes[baseShape(otherShape)];
+    if (otherTrigger) return fireTrigger(otherTrigger, boosted, wtag) || [];
+    return [];
   }
+  return [];
 }
 
 /* ============================ detonation ============================ */
@@ -1041,12 +1168,15 @@ function detonateAll(fuse) {
     const [shape, r, c] = fuse.shift();
     special[r][c] = null;                  // never let a blast relight its source
     const color = board[r][c];
-    const value = SPECIAL_GEMS * PER_GEM * SHAPE_MULT[shape];
+    const value = Math.floor(SPECIAL_GEMS * PER_GEM * SHAPE_MULT[shape] * valueMult);
     const tag = `${shape} SPECIAL`;
     const effect = loadout.colors[color];
     if (effect) applyEffect(effect, value, tag);
     const trig = loadout.shapes[baseShape(shape)];
-    if (trig) fireTrigger(trig, value, tag);
+    if (trig) {
+      const extra = fireTrigger(trig, value, tag, color) || [];
+      extra.forEach(([y, x]) => blasted.add(key(y, x)));
+    }
 
     const fresh = blastCells(shape, r, c).filter(([y, x]) => !blasted.has(key(y, x)));
     fresh.forEach(([y, x]) => blasted.add(key(y, x)));
@@ -1057,7 +1187,7 @@ function detonateAll(fuse) {
       if (board[y][x] === color) caught++;
       if (special[y][x]) { const held = special[y][x]; special[y][x] = null; fuse.push([held, y, x]); }
     }
-    if (effect && caught) applyEffect(effect, caught * PER_GEM, `${shape} blast`);
+    if (effect && caught) applyEffect(effect, Math.floor(caught * PER_GEM * valueMult), `${shape} blast`);
     if (caught && color === loadout.locustColor) player.locusts += caught;
     if (caught && color === loadout.wildChargeColor) player.wildCharges += caught;
     log(`** ${shape} SPECIAL detonates -- ${fresh.length} gems destroyed`, "spec");
@@ -1133,10 +1263,21 @@ function comboDetonate(shape, colours, cells, opts) {
   }
   // One trigger per half of the fusion, so a mismatched pair fires whatever
   // each of its two shapes is bound to rather than double-firing the winner's.
-  for (const shp of opts.triggerShapes || [shape, shape]) {
+  const halves = opts.triggerShapes || [shape, shape];
+  const halfColors = opts.triggerColors || [null, null];
+  let extraCleared = [];
+  halves.forEach((shp, i) => {
     const trig = loadout.shapes[baseShape(shp)];
-    if (trig) fireTrigger(trig, value, tag);
-  }
+    if (!trig) return;
+    const otherI = halves.length === 2 ? 1 - i : i;
+    // wildcard only acts on a genuinely mismatched pairing -- a same-family
+    // fusion (e.g. line5+line5) must not feed it its own shape, or a
+    // converted gem would re-trigger wildcard on its own detonation and
+    // recurse without end.
+    const otherShape = halves[otherI] === shp ? null : halves[otherI];
+    const extra = fireTrigger(trig, value, tag, halfColors[i], otherShape, halfColors[otherI]) || [];
+    extraCleared = extraCleared.concat(extra);
+  });
 
   const chained = [], caught = {};
   if (opts.igniteAll) {
@@ -1162,12 +1303,13 @@ function comboDetonate(shape, colours, cells, opts) {
     if (count && col === loadout.wildChargeColor) player.wildCharges += count;
   }
   log(`** COMBO destroys ${cells.length} gems`, "combo");
-  return cells.concat(detonateAll(chained));
+  return cells.concat(detonateAll(chained)).concat(extraCleared);
 }
 
 function doFuse(r1, c1, r2, c2) {
   const a = special[r1][c1], b = special[r2][c2];
-  const colours = new Set([board[r1][c1], board[r2][c2]]);
+  const colorA = board[r1][c1], colorB = board[r2][c2];
+  const colours = new Set([colorA, colorB]);
   special[r1][c1] = null; special[r2][c2] = null;
 
   const famA = baseShape(a), famB = baseShape(b);
@@ -1208,6 +1350,7 @@ function doFuse(r1, c1, r2, c2) {
     value: value,
     tag: famA + "+" + famB + " COMBO",
     triggerShapes: [a, b],
+    triggerColors: [colorA, colorB],
     igniteAll: ignite,
   });
   collapse(blasted);
@@ -1241,7 +1384,7 @@ async function resolveBoard() {
 
       const effect = loadout.colors[color];
       const tag = chain === 1 ? shape : `${shape} (cascade ${chain})`;
-      if (effect) applyEffect(effect, cells.length * PER_GEM, tag);
+      if (effect) applyEffect(effect, Math.floor(cells.length * PER_GEM * valueMult), tag);
 
       for (const [r, c] of cells) {
         if (special[r][c]) { fuse.push([special[r][c], r, c]); special[r][c] = null; }
@@ -1367,18 +1510,29 @@ function resolveSpellEffect(name, factor, chaotic) {
   return { text: "?", cls: "good" };
 }
 
-function cast(name) {
-  if (busy) return;
-  if (!availableSpells().includes(name)) return;
-  const cost = spellCost(name);
-  if (player.mana < cost) return;
-  player.mana -= cost;
-  stats.spells[name] = (stats.spells[name] || 0) + 1;
+/* Banked chain-gem spell buffs, spent on the next cast that resolves.
+   Shared between a player-chosen cast() and Archmage of Chaos's autonomous
+   wild-charge proc -- the designer's ask was that chain-gem buffs empower
+   ANY spell that goes off, not just manually-cast ones. */
+function consumeSpellBuffs() {
   let factor = 1;
   if (player.doubleNext) { factor *= 2; player.doubleNext = false; }
   if (player.spellBuffStacks) { factor *= 1 + LINE4_SPELL_BUFF; player.spellBuffStacks--; }
+  return factor;
+}
+
+function cast(name) {
+  if (busy) return;
+  if (!availableSpells().includes(name)) return;
+  const free = player.nextSpellFree;
+  const cost = free ? 0 : spellCost(name);
+  if (player.mana < cost) return;
+  player.mana -= cost;
+  if (free) player.nextSpellFree = false;
+  stats.spells[name] = (stats.spells[name] || 0) + 1;
+  const factor = consumeSpellBuffs();
   const result = resolveSpellEffect(name, factor, false);
-  log(result.text, result.cls);
+  log(result.text + (free ? " (FREE CAST)" : ""), result.cls);
   afterAction();
 }
 
@@ -1407,7 +1561,10 @@ async function endTurn() {
     player.wildCharges %= threshold; // overflow carries, not wasted
     for (let i = 0; i < fires; i++) {
       const name = pick(availableSpells());
-      const result = resolveSpellEffect(name, 1, true);
+      // Chain-gem spell buffs empower a wild-charge cast exactly like a
+      // manual one -- not just mana-cost casts.
+      const factor = consumeSpellBuffs();
+      const result = resolveSpellEffect(name, factor, true);
       log(`wild charge erupts -- ${name}: ${result.text}`, result.cls);
     }
   }
@@ -1421,6 +1578,12 @@ async function endTurn() {
     e.countdown--;
     if (e.countdown <= 0) {
       const [label, , dmg] = e.pending;
+      if (player.dodgeCharges > 0) {
+        player.dodgeCharges--;
+        log(`${e.name} uses ${label}: DODGED, no damage taken`, "good");
+        queueNext(e);
+        continue;
+      }
       const blocked = Math.min(player.block, dmg);
       player.block -= blocked;
       const soaked = Math.min(player.armour, dmg - blocked);
@@ -1440,9 +1603,11 @@ async function endTurn() {
   }
   stats.dmgTaken += Math.max(0, hpBefore - player.hp);
   player.block = 0;
+  player.dodgeStacks = 0;  // dodge stacks count only WITHIN a turn, unlike banked dodgeCharges
   swipes = SWIPES_PER_TURN;
-  // spellBuffStacks and doubleNext both persist until actually spent on a
-  // cast -- banked buffs for "whenever I next cast", not same-turn-only.
+  // spellBuffStacks, doubleNext, nextSpellFree, and banked dodgeCharges all
+  // persist until actually spent -- banked buffs for "whenever I next
+  // cast/get hit", not same-turn-only.
   busy = false;
   render(true);
   afterAction();
@@ -1505,11 +1670,12 @@ function showReference() {
   }).join("");
 
   const combos = [
-    ["4 + 4", "three whole rows"], ["5 + 5", "a 5x5 crater"],
-    ["any L/T + L/T", "escalated combo, widened blast -- doesn't need to match, resolves as whichever ranks higher"],
-    ["+ + +", "the entire board"],
-    ["+ + anything", "every gem of that colour becomes that special, all detonating"],
-    ["4 or 5 vs. anything else", "mismatched -- the weaker is promoted to the stronger, both detonate ordinarily"],
+    ["4 + 4", "a 3x3 explosion"], ["5 + 5", "a 5x5 crater, and ignites every other special on the board"],
+    ["L + L", "three whole columns"], ["T + T", "three rows AND three columns"],
+    ["any mismatched pair", "its own spatial combo -- see the Chains table above for what your build's shapes do"],
+    ["line5 fused with anything else", loadout.shapes.line5
+      ? `also fires your line5 gem (${loadout.shapes.line5.replace(/_/g, " ")})`
+      : "no line5 gem picked -- only the spatial combo above applies"],
   ].map(([a, b]) => `<tr><td class="m">${a}</td><td colspan="3">${b}</td></tr>`).join("");
 
   const div = document.createElement("div");
@@ -1723,7 +1889,11 @@ async function attemptSwap(r1, c1, r2, c2) {
     render(true);
   } else {
     swipes--;
+    const doubled = player.doubleNextSwipe;
+    if (doubled) { valueMult = 2; player.doubleNextSwipe = false; }
     await resolveBoard();
+    valueMult = 1;
+    if (doubled) log("(swipe was DOUBLED)", "good");
   }
   busy = false;
   document.getElementById("board").classList.remove("resolving");
@@ -1961,7 +2131,11 @@ function render(fresh) {
   const buffs = [];
   if (player.doubleNext) buffs.push("NEXT SPELL FIRES TWICE");
   if (player.spellBuffStacks)
-    buffs.push(`${player.spellBuffStacks} SPELL BUFF STACK(S) (+${Math.round(LINE4_SPELL_BUFF * 100)}% EACH)`);
+    buffs.push(`${player.spellBuffStacks}/${SPELL_BUFF_MAX_STACKS} SPELL BUFF STACK(S) (+${Math.round(LINE4_SPELL_BUFF * 100)}% EACH)`);
+  if (player.nextSpellFree) buffs.push("NEXT SPELL FREE");
+  if (player.doubleNextSwipe) buffs.push("NEXT SWIPE DOUBLED");
+  if (player.dodgeCharges) buffs.push(`${player.dodgeCharges} DODGE CHARGE(S) READY`);
+  if (player.dodgeStacks) buffs.push(`DODGE ${player.dodgeStacks}/${DODGE_STACKS_THRESHOLD}`);
   if (player.locusts) buffs.push(`${player.locusts} LOCUST(S) BANKED`);
   if (player.wildCharges) buffs.push(`${player.wildCharges} WILD CHARGE (of ${loadout.wildChargeThreshold})`);
   q("buffs").innerHTML = buffs.map(b => `<div class="buff">${b}</div>`).join("");
@@ -2021,6 +2195,10 @@ function startEncounter() {
   player.spellBuffStacks = 0;
   player.locusts = 0;
   player.wildCharges = 0;
+  player.doubleNextSwipe = false;
+  player.nextSpellFree = false;
+  player.dodgeStacks = 0;
+  player.dodgeCharges = 0;
   swipes = SWIPES_PER_TURN;
   document.getElementById("encName").textContent = title;
   document.getElementById("encSub").textContent = encounter < ENCOUNTERS.length
@@ -2033,7 +2211,8 @@ function startEncounter() {
 function begin(picksArg, setKey) {
   loadout = buildLoadout(picksArg, setKey);
   player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
-             shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0 };
+             shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0,
+             doubleNextSwipe: false, nextSpellFree: false, dodgeStacks: 0, dodgeCharges: 0 };
   encounter = 0;
   document.getElementById("setup").classList.add("hidden");
   document.getElementById("game").classList.remove("hidden");
@@ -2053,7 +2232,7 @@ function begin(picksArg, setKey) {
 /* ============================ setup screen ============================ */
 
 const COLOUR_NAME = { R: "Red", G: "Green", Y: "Yellow", B: "Blue" };
-let picks = { R: null, G: null, Y: null, B: null, line4: null, hard: null };
+let picks = { R: null, G: null, Y: null, B: null, line4: null, hard: null, line5: null };
 let pickedSet = null;
 
 function allSocketsFilled() {
@@ -2099,6 +2278,8 @@ function refreshSetupSelection() {
     c.classList.toggle("selected", picks.line4 === c.dataset.gem));
   document.querySelectorAll("#gemHard .card").forEach(c =>
     c.classList.toggle("selected", picks.hard === c.dataset.gem));
+  document.querySelectorAll("#gemLine5 .card").forEach(c =>
+    c.classList.toggle("selected", picks.line5 === c.dataset.gem));
   document.querySelectorAll("#setCards .card").forEach(c =>
     c.classList.toggle("selected", c.dataset.k === pickedSet));
 
@@ -2124,6 +2305,9 @@ document.getElementById("gemHard").innerHTML = Object.entries(HARD_SHAPE_GEMS).m
   gemCardHtml("hard", key, `${MARK[g.shape] || g.shape} ${g.shape} → ${g.trigger.replace(/_/g, " ")}`,
     TRIGGER_DESC[g.trigger])).join("");
 
+document.getElementById("gemLine5").innerHTML = Object.keys(LINE5_GEMS).map(gem =>
+  gemCardHtml("line5", gem, gem.replace(/_/g, " "), TRIGGER_DESC[gem])).join("");
+
 document.getElementById("setCards").innerHTML =
   Object.entries(SETS).map(([k, s]) => setCardHtml(k, s)).join("");
 document.getElementById("presetCards").innerHTML =
@@ -2131,6 +2315,13 @@ document.getElementById("presetCards").innerHTML =
 
 document.querySelectorAll("#colourSockets .card, #gemLine4 .card, #gemHard .card").forEach(c => c.onclick = () => {
   picks[c.dataset.slot] = c.dataset.gem;
+  refreshSetupSelection();
+});
+// Optional socket, unlike the others -- click again to deselect (same
+// pattern as the tier-piece cards below), since going without a line5 gem
+// is a valid choice, not an unfilled requirement.
+document.querySelectorAll("#gemLine5 .card").forEach(c => c.onclick = () => {
+  picks.line5 = picks.line5 === c.dataset.gem ? null : c.dataset.gem;
   refreshSetupSelection();
 });
 document.querySelectorAll("#setCards .card").forEach(c => c.onclick = () => {
