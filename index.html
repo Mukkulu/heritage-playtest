@@ -336,8 +336,11 @@
       <h3 class="section-h">Line4 gem — your build's heartbeat trigger</h3>
       <div class="cards mini" id="gemLine4"></div>
 
-      <h3 class="section-h">Hard-shape gem — your rare payoff trigger</h3>
-      <div class="cards mini" id="gemHard"></div>
+      <h3 class="section-h">L trigger (prototype pool — plan is gear-specific later)</h3>
+      <div class="cards mini" id="gemHardL"></div>
+
+      <h3 class="section-h">T trigger (prototype pool — plan is gear-specific later)</h3>
+      <div class="cards mini" id="gemHardT"></div>
 
       <h3 class="section-h">Line5 gem (optional) — your rarest payoff, only fires on a 5-fusion</h3>
       <div class="cards mini" id="gemLine5"></div>
@@ -615,22 +618,22 @@ const LINE4_GEMS = {
   color_boost: "color_boost",
   all_color_boost: "all_color_boost",
 };
-// New (2026-07-30) hard-shape powers: kept bundled the same way as the
-// existing three (one pick = one shape + one trigger), just added twice --
-// once for L, once for T -- rather than decoupling shape from trigger.
-const HARD_SHAPE_GEMS = {
-  stun_L: { shape: "L", trigger: "stun" },
-  bleed_detonate_T: { shape: "T", trigger: "bleed_detonate" },
-  double_spell_T: { shape: "T", trigger: "double_next_spell" },
-  double_swipe_L: { shape: "L", trigger: "double_next_swipe" },
-  double_swipe_T: { shape: "T", trigger: "double_next_swipe" },
-  free_spell_L: { shape: "L", trigger: "free_spell" },
-  free_spell_T: { shape: "T", trigger: "free_spell" },
-  bleed_spike_L: { shape: "L", trigger: "bleed_spike" },
-  bleed_spike_T: { shape: "T", trigger: "bleed_spike" },
-  dodge_L: { shape: "L", trigger: "dodge" },
-  dodge_T: { shape: "T", trigger: "dodge" },
-};
+// L and T used to share one "hard-shape" pick, bundled with its shape (a
+// build only ever got a trigger on ONE of L/T). Changed 2026-07-31,
+// explicitly a prototype/experimental step and NOT the intended final
+// design: L and T now BOTH always get a trigger, picked independently from
+// this one shared pool -- so both slots are filled, and either can hold any
+// trigger, including the same one on both. The designer's stated long-term
+// plan is for this to become gear-specific (a real item binds a trigger to
+// a real slot) with L and T balanced against each other as their own axis;
+// this flat pool is just to try the shape out. A trigger that turns out too
+// strong sitting on the common L/T pool is also a one-line move into
+// LINE5_GEMS instead (fires only on a rare line5 fusion) -- both pools are
+// just lists of trigger names, so demoting one is not a structural change.
+const HARD_SHAPE_TRIGGERS = [
+  "stun", "bleed_detonate", "double_next_spell",
+  "double_next_swipe", "free_spell", "bleed_spike", "dodge",
+];
 // line5 gets its own pickable trigger for the first time -- previously it
 // only paid the flat shape multiplier plus whatever mixedBlast pattern its
 // fusion partner defined, with no gear hook of its own. Only one option so
@@ -650,15 +653,18 @@ const BASE_HP = 50;
 const PRESETS = {
   warden: {
     name: "Warden",
-    picks: { R: "attack", G: "block", Y: "splash", B: "armour", line4: "cleave", hard: "stun_L" },
+    picks: { R: "attack", G: "block", Y: "splash", B: "armour", line4: "cleave",
+             hardL: "stun", hardT: "dodge" },
   },
   bleeder: {
     name: "Bleeder",
-    picks: { R: "bleed", G: "block", Y: "splash", B: "lifesteal", line4: "bleed_burst", hard: "bleed_detonate_T" },
+    picks: { R: "bleed", G: "block", Y: "splash", B: "lifesteal", line4: "bleed_burst",
+             hardL: "bleed_spike", hardT: "bleed_detonate" },
   },
   stormcaller: {
     name: "Stormcaller",
-    picks: { R: "mana", G: "block", Y: "splash", B: "mana", line4: "spell_buff", hard: "double_spell_T" },
+    picks: { R: "mana", G: "block", Y: "splash", B: "mana", line4: "spell_buff",
+             hardL: "free_spell", hardT: "double_next_spell" },
   },
 };
 
@@ -700,7 +706,7 @@ const SETS = {
   },
 };
 
-// picks = { R, G, Y, B: <gem name>, line4: <gem name>, hard: <hard-shape gem key> }
+// picks = { R, G, Y, B: <gem name>, line4: <gem name>, hardL: <trigger>, hardT: <trigger> }
 function buildLoadout(picks, setKey) {
   const set = setKey ? SETS[setKey] : null;
   const colors = {};
@@ -711,8 +717,7 @@ function buildLoadout(picks, setKey) {
       if (eff === null) delete colors[col]; else colors[col] = eff;
     }
   }
-  const hardGem = HARD_SHAPE_GEMS[picks.hard];
-  const shapes = { line4: picks.line4, [hardGem.shape]: hardGem.trigger };
+  const shapes = { line4: picks.line4, L: picks.hardL, T: picks.hardT };
   if (picks.line5) shapes.line5 = picks.line5;
   return {
     name: set ? `Custom build — ${set.name}` : "Custom build",
@@ -2232,11 +2237,11 @@ function begin(picksArg, setKey) {
 /* ============================ setup screen ============================ */
 
 const COLOUR_NAME = { R: "Red", G: "Green", Y: "Yellow", B: "Blue" };
-let picks = { R: null, G: null, Y: null, B: null, line4: null, hard: null, line5: null };
+let picks = { R: null, G: null, Y: null, B: null, line4: null, hardL: null, hardT: null, line5: null };
 let pickedSet = null;
 
 function allSocketsFilled() {
-  return COLORS.every(c => picks[c]) && picks.line4 && picks.hard;
+  return COLORS.every(c => picks[c]) && picks.line4 && picks.hardL && picks.hardT;
 }
 
 function gemCardHtml(slot, gem, title, desc) {
@@ -2276,8 +2281,10 @@ function refreshSetupSelection() {
     c.classList.toggle("selected", picks[c.dataset.slot] === c.dataset.gem));
   document.querySelectorAll("#gemLine4 .card").forEach(c =>
     c.classList.toggle("selected", picks.line4 === c.dataset.gem));
-  document.querySelectorAll("#gemHard .card").forEach(c =>
-    c.classList.toggle("selected", picks.hard === c.dataset.gem));
+  document.querySelectorAll("#gemHardL .card").forEach(c =>
+    c.classList.toggle("selected", picks.hardL === c.dataset.gem));
+  document.querySelectorAll("#gemHardT .card").forEach(c =>
+    c.classList.toggle("selected", picks.hardT === c.dataset.gem));
   document.querySelectorAll("#gemLine5 .card").forEach(c =>
     c.classList.toggle("selected", picks.line5 === c.dataset.gem));
   document.querySelectorAll("#setCards .card").forEach(c =>
@@ -2301,9 +2308,10 @@ document.getElementById("colourSockets").innerHTML = COLORS.map(color => `
 document.getElementById("gemLine4").innerHTML = Object.keys(LINE4_GEMS).map(gem =>
   gemCardHtml("line4", gem, gem.replace(/_/g, " "), TRIGGER_DESC[gem])).join("");
 
-document.getElementById("gemHard").innerHTML = Object.entries(HARD_SHAPE_GEMS).map(([key, g]) =>
-  gemCardHtml("hard", key, `${MARK[g.shape] || g.shape} → ${g.trigger.replace(/_/g, " ")}`,
-    TRIGGER_DESC[g.trigger])).join("");
+document.getElementById("gemHardL").innerHTML = HARD_SHAPE_TRIGGERS.map(trig =>
+  gemCardHtml("hardL", trig, `${MARK.L} → ${trig.replace(/_/g, " ")}`, TRIGGER_DESC[trig])).join("");
+document.getElementById("gemHardT").innerHTML = HARD_SHAPE_TRIGGERS.map(trig =>
+  gemCardHtml("hardT", trig, `${MARK.T} → ${trig.replace(/_/g, " ")}`, TRIGGER_DESC[trig])).join("");
 
 document.getElementById("gemLine5").innerHTML = Object.keys(LINE5_GEMS).map(gem =>
   gemCardHtml("line5", gem, gem.replace(/_/g, " "), TRIGGER_DESC[gem])).join("");
@@ -2313,7 +2321,7 @@ document.getElementById("setCards").innerHTML =
 document.getElementById("presetCards").innerHTML =
   Object.entries(PRESETS).map(([k, p]) => presetCardHtml(k, p)).join("");
 
-document.querySelectorAll("#colourSockets .card, #gemLine4 .card, #gemHard .card").forEach(c => c.onclick = () => {
+document.querySelectorAll("#colourSockets .card, #gemLine4 .card, #gemHardL .card, #gemHardT .card").forEach(c => c.onclick = () => {
   picks[c.dataset.slot] = c.dataset.gem;
   refreshSetupSelection();
 });
