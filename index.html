@@ -417,6 +417,14 @@
 
 /* ============================ rules ============================ */
 
+// Bump this on every push that changes game behavior. There is no build
+// step for this static page (no bundler, no commit hash baked in), so this
+// is the only way a submitted log says which code it ran on -- the
+// submission timestamp alone is not reliable (GitHub Pages deploy lag,
+// browser caching a stale page). Dated rather than semver, matching how the
+// rest of this file already dates its design notes.
+const GAME_VERSION = "2026-07-31a";
+
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
 /* Resolution pacing. Raised a lot after "it is hard for me to understand" --
@@ -1717,6 +1725,7 @@ function buildReport() {
   const cleared = stats.encounters.filter(e => e.outcome === "cleared").length;
   L.push("MATCH-3 COMBAT PROTOTYPE — RUN LOG");
   L.push(new Date().toISOString());
+  L.push(`version        ${GAME_VERSION}`);
   L.push("");
   L.push(`loadout        ${loadout.name} (${loadout.hp} hp)`);
   L.push(`colours        ${COLORS.map(c => c + "=" + loadout.colors[c]).join("  ")}`);
