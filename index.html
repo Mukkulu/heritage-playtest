@@ -214,10 +214,30 @@
   .modal .yours { color: #f0cf78; font-weight: 700; }
   .modal .none { color: var(--dim); }
   .refbtn { margin-left: 10px; font-size: 12.5px; padding: 4px 10px; vertical-align: 3px; }
-  .gem.pop { animation: pop .22s ease-out; }
-  @keyframes pop { 0% { transform: scale(1); } 45% { transform: scale(1.28); filter: brightness(1.8); } 100% { transform: scale(1); } }
-  .gem.fresh { animation: drop .22s ease-out; }
-  @keyframes drop { 0% { transform: translateY(-24px); opacity: 0; } 100% { transform: none; opacity: 1; } }
+  /* Two kinds of destruction, shown differently, because "why is this gem
+     going?" is the question the animation has to answer. Held on screen for a
+     beat BEFORE anything clears, so you can read the shape that formed. */
+  .gem.doomed {                       /* gems YOU matched */
+    box-shadow: 0 0 0 3px #fff inset, 0 0 12px rgba(255,255,255,.5);
+    filter: brightness(1.3);
+    animation: doomedPulse .5s ease-in-out infinite alternate;
+  }
+  @keyframes doomedPulse { from { filter: brightness(1.15); } to { filter: brightness(1.5); } }
+  .gem.swept {                        /* gems a SPECIAL blasted */
+    box-shadow: 0 0 0 3px #f0cf78 inset, 0 0 14px rgba(240,207,120,.65);
+    filter: brightness(1.45) saturate(1.3);
+    animation: sweptPulse .4s ease-in-out infinite alternate;
+  }
+  @keyframes sweptPulse { from { transform: scale(1); } to { transform: scale(1.06); } }
+
+  .gem.pop { animation: pop .30s ease-out; }
+  @keyframes pop {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(1.35); filter: brightness(2.2); }
+    100% { transform: scale(.15); filter: brightness(2.6); opacity: 0; }
+  }
+  .gem.fresh { animation: drop .28s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes drop { 0% { transform: translateY(-30px); opacity: 0; } 100% { transform: none; opacity: 1; } }
 
   /* ---------- side panel ---------- */
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
@@ -292,8 +312,7 @@
         <li><b>Match 3+ of a colour</b> to trigger whatever that colour does — the icon on each gem shows you
           (e.g. ✖ damage, ▣ block, ♥ heal, ◆ mana).</li>
         <li><b>Match 4 or more</b> (a line, an L, or a T) and it <i>doesn't</i> pay out right away —
-          it leaves a <b>special gem</b> instead. Match that again later for a much bigger blast.
-          A tick mark (<b>L′</b>, <b>T″</b>) means the gem is <i>charged</i>: same blast, far bigger payout.</li>
+          it leaves a <b>special gem</b> instead. Match that again later for a much bigger blast.</li>
         <li><b>Fuse two specials</b> by swiping them into each other — always works, no colour needed, and hits harder still.</li>
         <li><b>Enemies telegraph</b>: their next move and its timing are shown ahead of time. Your 3 swipes a
           turn are for setting up against it, not just reacting.</li>
@@ -394,6 +413,16 @@
 
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
+/* Resolution pacing. Raised a lot after "it is hard for me to understand" --
+   the old 190ms decaying to 45ms was too quick to follow, and a cascade
+   finished before you could see what caused it. Each chain link now holds its
+   highlight for HOLD_MS, then pops and refills. Long chains still speed up so
+   a 15-link monster does not lock the board for a minute, but the floor is
+   high enough to stay readable. */
+const HOLD_MS = 420;          // how long "these gems are about to go" is shown
+const HOLD_FLOOR_MS = 190;    // fastest a deep cascade link may get
+const HOLD_DECAY_MS = 20;     // shaved per chain link
+
 const SWIPES_PER_TURN = 3;
 const PER_GEM = 2;
 const SPECIAL_GEMS = 5;
@@ -415,39 +444,23 @@ const CUSTODIAN_GEMS_PER_STRIKE = 50;
 // designer's own play (playtest note: "healed one of the enemies").
 const ARCHMAGE_BENEFICIAL_MISFIRE_CHANCE = 0.3;
 
-// L and T come in three size tiers, named by whichever of its two arms is
-// LONGER -- a swipe lands the highest chain rank it can reach, so a 5-run T'd
-// into a bare 3-run is a grand T. The tier is purely a PAYOUT CHARGE: every L
-// clears one column and every T clears a row and a column whatever tier
-// produced it, so the board reads uniformly and only the number changes.
-const SIZE_TIERS = ["lesser", "greater", "grand"];
-const sizeTier = len => (len >= 5 ? "grand" : len === 4 ? "greater" : "lesser");
+// There are NO size tiers. An L is an L however long its arms were; the extra
+// length is its own reward in gems cleared, not a separate gem with a separate
+// number. Tiers were tried and removed as too much to hold in your head.
 // The cross family was REMOVED: it was unbuildable at every tier, because a
 // cross's junction has all four neighbours inside the shape, so whichever one
 // you swap from receives the junction's old gem and breaks its own arm. A plus
 // now simply reads as its longest run.
-const isHard = shape => shape.endsWith("_L") || shape.endsWith("_T");
+const isHard = shape => shape === "L" || shape === "T";
 // Strip the size tier so gear can still bind a trigger to plain L or T
 // regardless of which tier fired -- size changes payout, never what gear does.
-const baseShape = shape =>
-  (shape === "line3" || shape === "line4" || shape === "line5") ? shape : shape.split("_")[1];
+// Kept for call sites: with tiers gone, a shape IS its own family.
+const baseShape = shape => shape;
 
-const SHAPE_MULT = {
-  line3: 1, line4: 2, line5: 3,
-  lesser_L: 3, greater_L: 5, grand_L: 8,
-  lesser_T: 4, greater_T: 7, grand_T: 12,
-};
-const RANK = [
-  "line3", "line4", "line5",
-  "lesser_L", "greater_L", "grand_L",
-  "lesser_T", "greater_T", "grand_T",
-];
+const SHAPE_MULT = { line3: 1, line4: 2, line5: 3, L: 3, T: 4 };
+const RANK = ["line3", "line4", "line5", "L", "T"];
 const MAKES_SPECIAL = new Set(RANK.filter(s => s !== "line3"));
-const MARK = {
-  line4: "4", line5: "5",
-  lesser_L: "L", greater_L: "L′", grand_L: "L″",
-  lesser_T: "T", greater_T: "T′", grand_T: "T″",
-};
+const MARK = { line4: "4", line5: "5", L: "L", T: "T" };
 /* One glyph per effect, drawn on every gem bound to it. Colour tells you
    which pillar, glyph tells you what it currently does -- and the glyph is
    what stays meaningful when a different loadout rebinds the colour. */
@@ -484,12 +497,8 @@ const TRIGGER_DESC = {
 const BLAST_DESC = {
   line4: "clears its row",
   line5: "blasts 3x3",
-  lesser_L: "clears its column",
-  greater_L: "clears 3 columns",
-  grand_L: "clears 5 columns",
-  lesser_T: "clears row AND column",
-  greater_T: "clears 3 rows AND 3 columns",
-  grand_T: "clears 5 rows AND 5 columns",
+  L: "clears its column",
+  T: "clears row AND column",
 };
 
 /* ============================ fusions ============================
@@ -789,11 +798,9 @@ function classify(runs) {
       // Crosses no longer exist -- skip that intersection and let the group
       // fall back to its longest run.
       if (hMid && vMid) continue;
-      const base = (hMid || vMid) ? "T" : "L";
-      // Ranked by whichever arm is LONGER, so a swipe lands the highest chain
-      // rank it can: a 5-run T'd into a bare 3-run is a grand T.
-      const hLen = h.b - h.a + 1, vLen = v.b - v.a + 1;
-      const s = `${sizeTier(Math.max(hLen, vLen))}_${base}`;
+      // No size tiers: an L is an L and a T is a T, whatever the arm lengths
+      // were. Longer runs still pay more, because more gems are consumed.
+      const s = (hMid || vMid) ? "T" : "L";
       if (best === null || RANK.indexOf(s) > RANK.indexOf(best)) best = s;
     }
   }
@@ -1012,10 +1019,8 @@ function blastCells(shape, r, c) {
   const push = (y, x) => { if (y >= 0 && y < SIZE && x >= 0 && x < SIZE) hit.push([y, x]); };
   if (shape === "line4") for (let x = 0; x < SIZE; x++) push(r, x);
   else if (shape === "line5") { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) push(r + dy, c + dx); }
-  // Tier is a payout charge only -- it never changes a footprint. Every L
-  // clears one column and every T clears a row and a column, at every tier.
-  else if (shape.endsWith("_L")) { for (let y = 0; y < SIZE; y++) push(y, c); }
-  else if (shape.endsWith("_T")) {
+  else if (shape === "L") { for (let y = 0; y < SIZE; y++) push(y, c); }
+  else if (shape === "T") {
     for (let x = 0; x < SIZE; x++) push(r, x);
     for (let y = 0; y < SIZE; y++) push(y, c);
   }
@@ -1064,12 +1069,15 @@ function comboBlast(shape, r1, c1, r2, c2) {
   const r = Math.floor((r1 + r2) / 2), c = Math.floor((c1 + c2) / 2);
   const all = [];
   for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) all.push([y, x]);
-  if (shape === "line4") return [all.filter(p => Math.abs(p[0] - r) <= 1), "three whole rows"];
+  // Two line4s make a 3x3 explosion -- a compact, readable shape rather than
+  // three full rows sweeping the board.
+  if (shape === "line4")
+    return [all.filter(p => Math.abs(p[0] - r) <= 1 && Math.abs(p[1] - c) <= 1),
+            "a 3x3 explosion"];
   if (shape === "line5") return [all.filter(p => Math.abs(p[0] - r) <= 2 && Math.abs(p[1] - c) <= 2), "a 5x5 crater"];
-  // A greater pair clears exactly what a lesser pair clears, just for more.
-  if (shape.endsWith("_L"))
+  if (shape === "L")
     return [all.filter(p => Math.abs(p[1] - c) <= 1), "three whole columns"];
-  if (shape.endsWith("_T"))
+  if (shape === "T")
     return [all.filter(p => Math.abs(p[0] - r) <= 1 || Math.abs(p[1] - c) <= 1),
             "three rows AND three columns"];
   return [blastCells(shape, r, c), "a doubled blast"];
@@ -1243,31 +1251,36 @@ async function resolveBoard() {
         anchor = anchorOf(cells);
         special[anchor[0]][anchor[1]] = shape;
         stats.specials++;
-        if (shape.startsWith("greater") || shape.startsWith("grand")) {
-          const fam = baseShape(shape);
-          log(`++ ${shape} lands a ${color} ${fam} gem, charged `
-            + `x${SHAPE_MULT[shape]} vs x${SHAPE_MULT["lesser_" + fam]} `
-            + `(${BLAST_DESC[shape]})`, "spec");
-        } else {
-          log(`++ ${shape} leaves a special ${color} gem (${BLAST_DESC[shape]})`, "spec");
-        }
+        log(`++ ${shape} leaves a special ${color} gem (${BLAST_DESC[shape]})`, "spec");
       }
       for (const [r, c] of cells) {
         if (!anchor || r !== anchor[0] || c !== anchor[1]) clear.add(key(r, c));
       }
     }
-    detonateAll(fuse).forEach(([r, c]) => clear.add(key(r, c)));
-
-    // Long chains accelerate, so a 15-link cascade doesn't lock input for
-    // six seconds. The first few links stay slow enough to read.
-    const pace = Math.max(45, 190 - chain * 16);
+    // Keep the two kinds of destruction apart so the highlight can explain
+    // itself: white = you matched this, gold = a special's blast swept it.
+    const matchedCells = [...clear].map(k => [Math.floor(k / SIZE), k % SIZE]);
+    const blastedCells = detonateAll(fuse);
+    blastedCells.forEach(([r, c]) => clear.add(key(r, c)));
     const cells = [...clear].map(k => [Math.floor(k / SIZE), k % SIZE]);
-    markPop(cells);
+
+    const pace = Math.max(HOLD_FLOOR_MS, HOLD_MS - chain * HOLD_DECAY_MS);
+
+    // 1. HOLD -- show what is about to go, and why, before anything moves.
+    markDoomed(matchedCells, blastedCells);
     render();
     await sleep(pace);
+
+    // 2. POP -- the marked gems blow up.
+    clearMarks();
+    markPop(cells);
+    render();
+    await sleep(pace * 0.55);
+
+    // 3. REFILL.
     collapse(cells);
     render(true);
-    await sleep(pace * 0.8);
+    await sleep(pace * 0.45);
   }
   if (!hasMove(board)) { reshuffle(); log("no moves left -- board reshuffled"); render(true); }
   if (loadout.cascadeBonus) fireCascadeBonus(totalMatches, totalGems, firstMatchGems || 0);
@@ -1465,12 +1478,8 @@ const SHAPE_HOW = {
   line3: "three in a row",
   line4: "four in a row",
   line5: "five in a row",
-  lesser_L: "two 3-runs meeting at their ends",
-  greater_L: "two 4-runs meeting at their ends",
-  grand_L: "two 5-runs meeting at their ends",
-  lesser_T: "a run ending in the middle of another, bottlenecked at 3",
-  greater_T: "a run ending in the middle of another, bottlenecked at 4",
-  grand_T: "a run ending in the middle of another, both runs 5+",
+  L: "two runs meeting at their ends",
+  T: "a run ending in the middle of another",
 };
 
 function showReference() {
@@ -1767,7 +1776,16 @@ function bindBoard() {
 /* ============================ render ============================ */
 
 let popped = new Set();
+let doomed = new Set();       // gems the player matched
+let swept = new Set();        // gems a special's blast took
 function markPop(cells) { popped = new Set(cells.map(([r, c]) => key(r, c))); }
+function markDoomed(matched, blasted) {
+  doomed = new Set(matched.map(([r, c]) => key(r, c)));
+  swept = new Set(blasted.map(([r, c]) => key(r, c)));
+  // a gem can be both; the blast reading wins, it explains more
+  for (const k of swept) doomed.delete(k);
+}
+function clearMarks() { doomed = new Set(); swept = new Set(); }
 
 /* What a colour effect will actually read as, mirroring applyEffect's maths
    so the preview never promises a number the swap won't deliver. */
@@ -1851,7 +1869,7 @@ function renderGemRow() {
 /* The Combos tooltip. Labels are generated by calling the REAL blast
    functions, so this can never drift from what a fusion actually does. */
 function comboBoxHTML() {
-  const rep = { line4: "line4", line5: "line5", L: "lesser_L", T: "lesser_T" };
+  const rep = { line4: "line4", line5: "line5", L: "L", T: "T" };
   const shown = { line4: "4", line5: "5", L: "L", T: "T" };
   const pairs = Object.keys(FUSION_AVAILABILITY)
     .sort((a, b) => FUSION_AVAILABILITY[b] - FUSION_AVAILABILITY[a]);
@@ -1875,8 +1893,7 @@ function comboBoxHTML() {
       <h4>Swipe two special gems together</h4>
       <table>${rows}</table>
       <p class="foot">Rarer pairings pay more &mdash; the multiplier is derived from
-      how often the board actually offers each one. Tier (L&prime;, T&Prime;) raises the
-      payout, never the blast size.</p>
+      how often the board actually offers each one. payout scales with how many gems the shape consumed.</p>
     </div></div>`;
 }
 
@@ -1906,8 +1923,11 @@ function render(fresh) {
         }
       }
     }
-    if (popped.has(key(r, c))) d.classList.add("pop");
+    const k2 = key(r, c);
+    if (popped.has(k2)) d.classList.add("pop");
     else if (fresh) d.classList.add("fresh");
+    if (doomed.has(k2)) d.classList.add("doomed");
+    if (swept.has(k2)) d.classList.add("swept");
     d.dataset.r = r; d.dataset.c = c;
     if (special[r][c]) {
       const s = document.createElement("span");
@@ -2068,7 +2088,7 @@ function renderSetupPreview() {
     return `<span class="chip"><b style="color:var(--${c})">${EFFECT_ICON[eff] || ""}</b> ${eff.replace(/_/g, " ")}</span>`;
   }).join(" ");
   const shapeChips = Object.entries(l.shapes).map(([s, t]) =>
-    `<span class="chip">${MARK["lesser_" + s] || s} → ${t.replace(/_/g, " ")}</span>`).join(" ");
+    `<span class="chip">${MARK[s] || s} → ${t.replace(/_/g, " ")}</span>`).join(" ");
   el.innerHTML = `<b>${l.name}</b> (${l.hp} hp) &nbsp; ${colourChips} &nbsp; ${shapeChips}`;
 }
 
@@ -2101,7 +2121,7 @@ document.getElementById("gemLine4").innerHTML = Object.keys(LINE4_GEMS).map(gem 
   gemCardHtml("line4", gem, gem.replace(/_/g, " "), TRIGGER_DESC[gem])).join("");
 
 document.getElementById("gemHard").innerHTML = Object.entries(HARD_SHAPE_GEMS).map(([key, g]) =>
-  gemCardHtml("hard", key, `${MARK["lesser_" + g.shape] || g.shape} ${g.shape} → ${g.trigger.replace(/_/g, " ")}`,
+  gemCardHtml("hard", key, `${MARK[g.shape] || g.shape} ${g.shape} → ${g.trigger.replace(/_/g, " ")}`,
     TRIGGER_DESC[g.trigger])).join("");
 
 document.getElementById("setCards").innerHTML =
