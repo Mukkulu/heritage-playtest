@@ -2302,7 +2302,7 @@ document.getElementById("gemLine4").innerHTML = Object.keys(LINE4_GEMS).map(gem 
   gemCardHtml("line4", gem, gem.replace(/_/g, " "), TRIGGER_DESC[gem])).join("");
 
 document.getElementById("gemHard").innerHTML = Object.entries(HARD_SHAPE_GEMS).map(([key, g]) =>
-  gemCardHtml("hard", key, `${MARK[g.shape] || g.shape} ${g.shape} → ${g.trigger.replace(/_/g, " ")}`,
+  gemCardHtml("hard", key, `${MARK[g.shape] || g.shape} → ${g.trigger.replace(/_/g, " ")}`,
     TRIGGER_DESC[g.trigger])).join("");
 
 document.getElementById("gemLine5").innerHTML = Object.keys(LINE5_GEMS).map(gem =>
