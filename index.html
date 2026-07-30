@@ -1728,7 +1728,7 @@ function buildReport() {
   L.push(`version        ${GAME_VERSION}`);
   L.push("");
   L.push(`loadout        ${loadout.name} (${loadout.hp} hp)`);
-  L.push(`colours        ${COLORS.map(c => c + "=" + loadout.colors[c]).join("  ")}`);
+  L.push(`colours        ${COLORS.map(c => c + "=" + (effectLabel(loadout, c) || "inert")).join("  ")}`);
   L.push(`triggers       ${Object.entries(loadout.shapes).map(([s, t]) => s + " -> " + t).join("  ")}`);
   const waves = Math.max(0, cleared - ENCOUNTERS.length);
   L.push(`result         cleared ${Math.min(cleared, ENCOUNTERS.length)} of ${ENCOUNTERS.length}` +
