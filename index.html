@@ -2196,14 +2196,14 @@ function startEncounter() {
   player.block = 0;
   player.armour = 0;
   player.shield = 0;
-  player.doubleNext = false;
-  player.spellBuffStacks = 0;
   player.locusts = 0;
   player.wildCharges = 0;
-  player.doubleNextSwipe = false;
-  player.nextSpellFree = false;
-  player.dodgeStacks = 0;
-  player.dodgeCharges = 0;
+  player.dodgeStacks = 0;        // turn-scoped, not banked -- unlike dodgeCharges below
+  // doubleNext, spellBuffStacks, doubleNextSwipe, nextSpellFree, and banked
+  // dodgeCharges are NOT reset here -- they're banked until actually spent,
+  // same as within a fight, so a stack earned right as the last enemy dies
+  // survives into the next encounter instead of being wasted. Matches the
+  // Python build, which never reset these between encounters either.
   swipes = SWIPES_PER_TURN;
   document.getElementById("encName").textContent = title;
   document.getElementById("encSub").textContent = encounter < ENCOUNTERS.length
