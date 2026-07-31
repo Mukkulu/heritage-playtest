@@ -16,6 +16,7 @@
     --G: #4cb377;
     --Y: #dfb13a;
     --B: #4a8ede;
+    --X: #7b5ea7;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -36,6 +37,10 @@
   }
   .card:hover { border-color: #55607a; transform: translateY(-2px); }
   .card.selected { border-color: #7fa6ff; box-shadow: 0 0 0 1px #7fa6ff inset; }
+  /* L and T share one trigger pool but must hold different triggers --
+     whichever one the other socket already picked shows greyed out here. */
+  .card.disabled { opacity: .35; cursor: not-allowed; pointer-events: none; }
+  .card.disabled:hover { transform: none; border-color: var(--line); }
   .card h3 { margin: 0 0 4px; font-size: 16px; }
   .card p { margin: 0 0 10px; color: var(--dim); font-size: 13px; }
   .intro { color: var(--dim); font-size: 13.5px; max-width: 780px; margin: 0 0 20px; }
@@ -169,10 +174,17 @@
     font-weight: 800; font-size: 15px; color: #10121a;
     cursor: grab; transition: transform .12s, box-shadow .12s;
   }
-  .gem.R { background: var(--R); }
-  .gem.G { background: var(--G); }
-  .gem.Y { background: var(--Y); }
-  .gem.B { background: var(--B); }
+  .gem.R, .gem.G, .gem.Y, .gem.B {
+    background-repeat: no-repeat; background-position: center; background-size: 92%;
+  }
+  /* Hand-drawn gem art sits on the flat colour, which still shows through the
+     art's transparent corners -- same "flat fill first, then art on top"
+     approach used for the overworld's terrain tiles. */
+  .gem.R { background-color: var(--R); background-image: url(graphics/redgem.png); }
+  .gem.G { background-color: var(--G); background-image: url(graphics/greengem.png); }
+  .gem.Y { background-color: var(--Y); background-image: url(graphics/yellowgem.png); }
+  .gem.B { background-color: var(--B); background-image: url(graphics/bluegem.png); }
+  .gem.X { background: var(--X); }
   .gem.sel { box-shadow: 0 0 0 3px #fff inset; transform: scale(.88); }
   .gem.adj { box-shadow: 0 0 0 2px rgba(255,255,255,.35) inset; }
   .gem.willmatch { box-shadow: 0 0 0 3px #fff inset; }
@@ -346,6 +358,9 @@
 
       <h3 class="section-h">Line5 gem (optional) — your rarest payoff, only fires on a 5-fusion</h3>
       <div class="cards mini" id="gemLine5"></div>
+
+      <h3 class="section-h">Ultimate gem (optional) — fires only on a 5chain+5chain fusion</h3>
+      <div class="cards mini" id="gemUltimate"></div>
     </div>
 
     <h3 class="section-h">Tier piece (optional)</h3>
@@ -425,7 +440,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-07-30a";
+const GAME_VERSION = "2026-07-31a";
 
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
@@ -489,6 +504,57 @@ const CUSTODIAN_GEMS_PER_STRIKE = 50;
 // designer's own play (playtest note: "healed one of the enemies").
 const ARCHMAGE_BENEFICIAL_MISFIRE_CHANCE = 0.3;
 
+// ---- 2026-07-31 batch: designer's Sockets/Tier pieces/Spells/Status
+// sheets. All numeric placeholders, same as everything above -- pending
+// playtest. Lives up here (not down by the rest of that batch's code)
+// because several SETS blurbs below need these values at parse time.
+
+// Seeded special gems: a tier piece can place a hardcoded-effect gem
+// directly onto the board (not one of the 4 kit colours). It still matches
+// normally via findMatches() -- the per-match loop in resolveBoard() checks
+// SEEDED_GEMS before falling back to the player's own colour picks.
+// Currently just Void's Gift -- Apocetharys Garb's poison gem used to share
+// this (a matchable board colour), but the designer's follow-up redefined
+// it as a real special/chain gem instead (see "poison" handling in
+// detonateAll/doFuse), so it no longer belongs here.
+const SEEDED_GEMS = new Set(["X"]); // X = void (Void's Gift)
+const VOID_STRENGTH = 2.0;        // void gem match: pays this many times a normal attack hit
+const VOID_SELFHIT_FRAC = 0.05;   // ...and this fraction of that also hits the player
+const POISON_PCT_MAX_HP = 0.08;   // poison special gem detonation: this fraction of target's max hp
+
+const FREEZE_STACKS_THRESHOLD = 3;   // status effect: 3 stacks -> 1 stun (ticks the same stagger meter)
+
+const BLOODGOD_BLEED_MULT = 2;             // Blood for the Bloodgod 2pc: bleed stacks granted are doubled
+const BLOODGOD_MANA_PER_BLEED_DMG = 1;     // 4pc: mana gained per point of bleed damage dealt
+const RAZORS_END_DEATH_MULT_CAP = 2.5;     // Razor's End 4pc: damage-taken multiplier caps at 250% missing hp
+const TACTICIAN_2PC_MAX_PER_TURN = 1;      // Tactician's Regalia 2pc: random gem -> 4chain, capped per turn
+const TACTICIAN_4PC_MAX_PER_TURN = 2;      // 4pc: bonus swipe on no-cascade, capped per turn
+const ROSE_THORNS_REFLECT_FRAC = 0.5;      // Rose Thorns 2pc: fraction of incoming damage reflected
+const ACE_OF_CLUBS_EXPLODE_FRAC = 0.25;    // Ace of Clubs: dead enemy explodes for this fraction of its max hp
+const APOCETHARYS_GEMS_PER_PROC = 1;       // Apocetharys Garb: poison special gems planted per 4chain/5chain
+const GAMBLE_SHAPE_WEIGHTS = { line4: 40, L: 25, T: 25, line5: 10 };  // Gamblers Gambit: odds of each shape
+const ARCHMAGE_DOUBLE_EVERY_NTH_CAST = 5;  // Archmage 4pc: every Nth lifetime wild-charge cast doubles
+const ARCHMAGE_IMPLODE_CHANCE = 0.1;       // 4pc: chance per cast beyond 5-in-a-turn to implode
+const ARCHMAGE_IMPLODE_DAMAGE = 30;        // 4pc: implode damage, hits every enemy
+
+const HEAL_LAST_TURN_FRAC = 0.7;   // Minor "heal 70% of health lost last turn"
+const MINOR_MANA_RESTORE = 25;     // Minor "restore 25 mana"
+const MINOR_HEAL_RESTORE = 10;     // Minor "restore 10 health"
+const MINOR_VOID_GEM_SPAWN = 3;    // Minor "spawn 3 void gems"
+const MAJOR_MANA_RESTORE = 50;     // Major "restore 50 mana"
+const MAJOR_HEAL_RESTORE = 20;     // Major "restore 20 health"
+const PHANTOM_BLADE_TURNS = 2;         // Power "phantom blade": turns Red/Yellow payouts are doubled
+const SWIPE_MULT_TRIGGER_COUNT = 5;    // Power "swipe activation trigger 5x": next swipe's triggers fire this many times
+const ACID_DMG_PER_TURN = 5;       // spell "Acid rain": flat damage per turn
+const ACID_TURNS = 3;              // ...for this many turns
+
+// Ultimate socket: a genuinely new 4th trigger slot, bound to a
+// line5+line5 fusion specifically -- fires ALONGSIDE the existing "ignite"
+// freebie (every 5+5 already ignites every other special on the board;
+// this is an additional, player-picked payoff on top of that).
+const ULTIMATE_GEMS = ["deathmark"];
+const DEATHMARK_ENEMY_HP = 5;   // "deathmark": every living enemy's hp is set to this
+
 // There are NO size tiers. An L is an L however long its arms were; the extra
 // length is its own reward in gems cleared, not a separate gem with a separate
 // number. Tiers were tried and removed as too much to hold in your head.
@@ -505,7 +571,7 @@ const baseShape = shape => shape;
 const SHAPE_MULT = { line3: 1, line4: 2, line5: 3, L: 3, T: 4 };
 const RANK = ["line3", "line4", "line5", "L", "T"];
 const MAKES_SPECIAL = new Set(RANK.filter(s => s !== "line3"));
-const MARK = { line4: "4", line5: "5", L: "L", T: "T" };
+const MARK = { line4: "4", line5: "5", L: "L", T: "T", poison: "p" };
 /* One glyph per effect, drawn on every gem bound to it. Colour tells you
    which pillar, glyph tells you what it currently does -- and the glyph is
    what stays meaningful when a different loadout rebinds the colour. */
@@ -513,6 +579,10 @@ const EFFECT_ICON = {
   attack: "✖", bleed: "≈", block: "▣", mana: "◆", splash: "∴",
   armour: "▲", lifesteal: "♥", wild_charge: "✦",
 };
+// Seeded gems (see SEEDED_GEMS) aren't bound to loadout.colors at all -- a
+// fixed icon per colour letter, looked up directly instead of through
+// effectLabel().
+const SEEDED_GEM_ICON = { X: "☠" };
 const EFFECT_DESC = {
   attack: "damage to your target",
   bleed: "stacks that tick every turn",
@@ -546,6 +616,21 @@ const TRIGGER_DESC = {
   dodge: `gain a stack; at ${DODGE_STACKS_THRESHOLD} stacks (within a turn) bank one fully-dodged attack`,
   wildcard: `on a line5 fusion with any OTHER chain gem: that other half detonates one `
     + `more time, at ${WILDCARD_POWER_MULT}x its normal value`,
+  bleed_replicate: "copies the biggest bleed stack onto a different living enemy",
+  heal_last_turn: `heal ${Math.round(HEAL_LAST_TURN_FRAC * 100)}% of the health you lost last turn`,
+  restore_mana_minor: `+${MINOR_MANA_RESTORE} mana`,
+  restore_health_minor: `+${MINOR_HEAL_RESTORE} health`,
+  spawn_void_minor: `places ${MINOR_VOID_GEM_SPAWN} void gems on the board`,
+  freeze: `+1 freeze stack; at ${FREEZE_STACKS_THRESHOLD} stacks it converts into a stagger`,
+  bleed_spike_all: "every bleeding enemy spikes at once, WITHOUT consuming their stacks",
+  confuse: "target's next queued attack lands on a different enemy instead of you",
+  restore_mana_major: `+${MAJOR_MANA_RESTORE} mana`,
+  restore_health_major: `+${MAJOR_HEAL_RESTORE} health`,
+  phantom_blade: `Red/Yellow payouts (attack/bleed/splash) are doubled for ${PHANTOM_BLADE_TURNS} turns`,
+  swipe_multiplier: `your next swipe's triggers all fire ${SWIPE_MULT_TRIGGER_COUNT}x`,
+  damage_negate: "next turn's enemy damage is fully negated, then reflected back once tallied",
+  deathmark: `every living enemy is set to ${DEATHMARK_ENEMY_HP} hp -- clear the field before your `
+    + `next turn ends, or you die`,
 };
 
 const BLAST_DESC = {
@@ -600,6 +685,9 @@ const SPELLS = {
   heal:    { cost: 60, label: "Heal",    note: "+15 health", beneficial: true },
   fire:    { cost: 50, label: "Fire",    note: "20 to one" },
   thunder: { cost: 90, label: "Thunder", note: "12 to all" },
+  gamble:  { cost: 40, label: "Gambler's Gambit", note: "next 3-match also leaves a random chain gem (4/L/T, or line5 at 10%)" },
+  acid:    { cost: 70, label: "Acid Rain", note: `${ACID_DMG_PER_TURN} dmg/turn to every enemy, ${ACID_TURNS} turns` },
+  freeze:  { cost: 55, label: "Freeze Blast", note: `1 freeze stack on every enemy (${FREEZE_STACKS_THRESHOLD} stuns)` },
 };
 
 // Full build-crafting: each of the 4 colours is an independent socket, and
@@ -627,6 +715,13 @@ const LINE4_GEMS = {
   spell_buff: "spell_buff",
   color_boost: "color_boost",
   all_color_boost: "all_color_boost",
+  dodge: "dodge",
+  bleed_replicate: "bleed_replicate",
+  heal_last_turn: "heal_last_turn",
+  restore_mana_minor: "restore_mana_minor",
+  restore_health_minor: "restore_health_minor",
+  spawn_void_minor: "spawn_void_minor",
+  freeze: "freeze",
 };
 // L and T used to share one "hard-shape" pick, bundled with its shape (a
 // build only ever got a trigger on ONE of L/T). Changed 2026-07-30,
@@ -643,13 +738,17 @@ const LINE4_GEMS = {
 const HARD_SHAPE_TRIGGERS = [
   "stun", "bleed_detonate", "double_next_spell",
   "double_next_swipe", "free_spell", "bleed_spike", "dodge",
+  "bleed_spike_all", "confuse", "restore_mana_major", "restore_health_major",
 ];
 // line5 gets its own pickable trigger for the first time -- previously it
 // only paid the flat shape multiplier plus whatever mixedBlast pattern its
-// fusion partner defined, with no gear hook of its own. Only one option so
-// far (same situation Yellow's GEM_POOLS was already left in -- a known
-// gap, not a bug).
-const LINE5_GEMS = { wildcard: "wildcard" };
+// fusion partner defined, with no gear hook of its own.
+const LINE5_GEMS = {
+  wildcard: "wildcard",
+  phantom_blade: "phantom_blade",
+  swipe_multiplier: "swipe_multiplier",
+  damage_negate: "damage_negate",
+};
 
 // HP no longer comes from a class archetype now that colours are picked
 // independently -- flat placeholder until there's a real answer for what
@@ -681,14 +780,17 @@ const PRESETS = {
 const SETS = {
   // 2pc rebinds green to lifesteal (same mechanic as Bleeder's blue,
   // overheal capped into a shield at half max HP) on whichever class you
-  // picked. 4pc: every green gem that pays out (base match, blast-caught,
-  // or fusion-combo-caught) breeds one locust; locusts bite a random living
-  // enemy for 1 each at end of turn, then reset to zero.
+  // picked -- and lifesteal now ALSO grants shield equal to what it heals,
+  // not just as overflow past full hp. 4pc: every green gem that pays out
+  // (base match, blast-caught, or fusion-combo-caught) breeds one locust;
+  // locusts bite a random living enemy for 1 each at end of turn, then
+  // reset to zero.
   pharaoh: {
     name: "Pharaoh's Curse",
-    blurb: "2pc: green heals into a shield. 4pc: every green gem matched also breeds a locust that bites something at turn's end.",
+    blurb: "2pc: green heals into a shield -- lifesteal now ALSO grants shield equal to what it heals, not just as overflow past full hp. 4pc: every green gem matched also breeds a locust that bites something at turn's end.",
     colorOverrides: { G: "lifesteal" },
     locustColor: "G",
+    lifestealGrantsShield: true,
   },
   // Colour-independent, no colour rebind at all. Fires automatically after
   // every swipe resolves, regardless of what colour was matched or what
@@ -705,18 +807,70 @@ const SETS = {
   // effect at all under this set, deliberately. Pays off as a free random
   // spell at end_turn once the threshold is crossed (MTG storm / Yogg-Saron
   // flavour). A chaos-fired heal can misfire onto a random living enemy
-  // instead of the player -- a deliberate player cast never does.
+  // instead of the player -- a deliberate player cast never does. 4pc:
+  // every ARCHMAGE_DOUBLE_EVERY_NTH_CAST'th lifetime wild-charge cast
+  // deals double; more than that many casts in one turn each risk a small
+  // chance to implode for ARCHMAGE_IMPLODE_DAMAGE to everything.
   archmage: {
     name: "Archmage of Chaos",
-    blurb: "Blue does nothing on its own -- it builds wild charge. At 5 charges, a free random spell fires automatically at end of turn. No mana cost, no aim -- and a chaos-fired heal can land on an enemy instead of you.",
+    blurb: "Blue does nothing on its own -- it builds wild charge. At 5 charges (4pc; 2pc alone would need 10), a free random spell fires automatically at end of turn, benefiting from any banked spell buffs same as a manual cast. No mana cost, no aim -- a chaos-fired heal can land on an enemy instead of you. 4pc: every " + ARCHMAGE_DOUBLE_EVERY_NTH_CAST + "th wild-charge cast (lifetime) deals double; more than " + ARCHMAGE_DOUBLE_EVERY_NTH_CAST + " casts in one turn each risk a small chance to implode for " + ARCHMAGE_IMPLODE_DAMAGE + " to everything.",
     colorOverrides: { B: null },
     spells: ["heal", "fire", "thunder"],
     wildChargeColor: "B",
     wildChargeThreshold: 5,
+    archmageOverload: true,
+  },
+  bloodgod: {
+    name: "Blood for the Bloodgod",
+    blurb: "2pc: bleed stacks granted are doubled (" + BLOODGOD_BLEED_MULT + "x). 4pc: bleed damage dealt also grants that much mana (" + BLOODGOD_MANA_PER_BLEED_DMG + " mana per point of bleed damage).",
+    bleedMult: BLOODGOD_BLEED_MULT,
+    bleedGrantsMana: true,
+  },
+  razorsEnd: {
+    name: "Razor's End",
+    blurb: "2pc: a would-be-lethal hit leaves you at 1 hp instead -- once per encounter. 4pc: deal more damage the more of your own health is missing, up to " + Math.round(RAZORS_END_DEATH_MULT_CAP * 100) + "% at empty health.",
+    razorsEnd: true,
+  },
+  tactician: {
+    name: "Tactician's Regalia",
+    blurb: "2pc: a swipe that doesn't cascade turns a random gem into a 4chain special, up to " + TACTICIAN_2PC_MAX_PER_TURN + "x a turn. 4pc: a swipe that doesn't cascade also grants another swipe this turn, up to " + TACTICIAN_4PC_MAX_PER_TURN + "x a turn.",
+    tacticianRegalia: true,
+  },
+  rose: {
+    name: "Rose Thorns",
+    blurb: Math.round(ROSE_THORNS_REFLECT_FRAC * 100) + "% of damage you take is dealt back to whatever hit you. 4pc: that reflected damage also applies bleed.",
+    roseThorns: true,
+    roseThornsBleed: true,
+  },
+  voidsGift: {
+    name: "Void's Gift",
+    blurb: "2pc: every 3 blue gems matched spawns a void gem -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too. 4pc: matched void gems spawn more, and chip everything on the board for 1 more.",
+    voidGift: true,
+  },
+  ace: {
+    name: "Ace of Clubs",
+    blurb: "2pc: a defeated enemy explodes for " + Math.round(ACE_OF_CLUBS_EXPLODE_FRAC * 100) + "% of its own max hp to every other enemy. 4pc: if that explosion kills another enemy, they explode too.",
+    aceOfClubs: true,
+  },
+  apocetharys: {
+    name: "Apocetharys Garb",
+    blurb: "2pc: 4chain also plants a dormant poison gem on the board -- swipe it into another chain gem, or catch it in a cascading explosion, to detonate it for " + Math.round(POISON_PCT_MAX_HP * 100) + "% of your target's max hp. 4pc: 5chain plants one too, and any poison gem's detonation instead hits every living enemy at once for the same amount.",
+    apocetharys2pc: true,
+    apocetharys4pc: true,
   },
 };
 
-// picks = { R, G, Y, B: <gem name>, line4: <gem name>, hardL: <trigger>, hardT: <trigger> }
+// Plain boolean passthrough flags -- every set that's just an on/off switch
+// (no colour override, no extra data) goes through here instead of a
+// hand-written copy per flag.
+const SET_FLAG_PASSTHROUGH = [
+  "cascadeBonus", "lifestealGrantsShield", "razorsEnd", "roseThorns",
+  "roseThornsBleed", "voidGift", "archmageOverload", "tacticianRegalia",
+  "aceOfClubs", "bleedGrantsMana", "apocetharys2pc", "apocetharys4pc",
+];
+
+// picks = { R, G, Y, B: <gem name>, line4: <gem name>, hardL: <trigger>,
+//           hardT: <trigger>, line5: <trigger>, ultimate: <trigger> }
 function buildLoadout(picks, setKey) {
   const set = setKey ? SETS[setKey] : null;
   const colors = {};
@@ -729,7 +883,8 @@ function buildLoadout(picks, setKey) {
   }
   const shapes = { line4: picks.line4, L: picks.hardL, T: picks.hardT };
   if (picks.line5) shapes.line5 = picks.line5;
-  return {
+  if (picks.ultimate) shapes.ultimate = picks.ultimate;
+  const loadout = {
     name: set ? `Custom build — ${set.name}` : "Custom build",
     blurb: set ? set.blurb : "Crafted from your own recipe book, one gem per socket.",
     hp: BASE_HP,
@@ -740,8 +895,10 @@ function buildLoadout(picks, setKey) {
     locustColor: set ? set.locustColor : undefined,
     wildChargeColor: set ? set.wildChargeColor : undefined,
     wildChargeThreshold: set ? set.wildChargeThreshold : undefined,
-    cascadeBonus: !!(set && set.cascadeBonus),
+    bleedMult: set && set.bleedMult ? set.bleedMult : 1,
   };
+  if (set) for (const flag of SET_FLAG_PASSTHROUGH) if (set[flag]) loadout[flag] = true;
+  return loadout;
 }
 
 /* Sized against a HUMAN, not the random-play simulator. Re-sized a second time
@@ -794,6 +951,7 @@ function endlessWave(n) {
 let board, special, loadout;
 let player, enemies, targetIdx, encounter, swipes, busy = false;
 let valueMult = 1;  // Lchain/Tchain "double_next_swipe" -- 2 for one swipe's resolution, else 1
+let triggerRepeat = 1;  // Power "swipe_multiplier" -- SWIPE_MULT_TRIGGER_COUNT for one swipe, else 1
 
 const rnd = n => Math.floor(Math.random() * n);
 const pick = a => a[rnd(a.length)];
@@ -805,7 +963,11 @@ function mkEnemy(name, hp, actions, resolve = 1) {
   // the meter (overflow rather than waste); at `resolve` ticks it loses its
   // action and the meter resets.
   const e = { name, hp, maxHp: hp, actions, bleed: 0, stunned: 0,
-              resolve, stunMeter: 0 };
+              resolve, stunMeter: 0,
+              freezeStacks: 0,  // status effect: 3 stacks -> 1 stun, ticks the same stagger meter
+              acidTurns: 0, acidDmg: 0,  // spell "Acid rain"
+              confused: false,  // Major "confuse": next queued attack retargets to another enemy
+              exploded: false };  // Ace of Clubs -- so a dead enemy only explodes once
   queueNext(e);
   // Desynchronise a group so six goblins don't land as one wall on turn one.
   e.countdown += rnd(2);
@@ -979,11 +1141,30 @@ function log(text, cls) {
 }
 
 function applyEffect(effect, value, tag) {
+  // Razor's End 4pc: the more of your OWN health is missing, the harder
+  // every damage-dealing effect hits -- scales up to RAZORS_END_DEATH_MULT_CAP
+  // (250%) at empty health. Only effects that hit an enemy scale.
+  if ((effect === "attack" || effect === "bleed" || effect === "splash") && loadout.razorsEnd) {
+    const missingFrac = player.maxHp ? Math.max(0, Math.min(1, (player.maxHp - player.hp) / player.maxHp)) : 0;
+    const mult = 1 + (RAZORS_END_DEATH_MULT_CAP - 1) * missingFrac;
+    value = Math.floor(value * mult);
+  }
+  // Power "phantom blade": Red/Yellow attacks replicate for a few turns.
+  // attack/bleed are red-exclusive and splash is yellow-exclusive by
+  // construction (see GEM_POOLS), so keying off effect name is equivalent
+  // to keying off colour here.
+  if ((effect === "attack" || effect === "bleed" || effect === "splash") && player.phantomBladeTurns > 0) {
+    value *= 2;
+  }
   const t = currentTarget();
   if (effect === "attack") {
     if (t) { t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit"); }
   } else if (effect === "bleed") {
-    if (t) { const s = Math.max(1, Math.floor(value / 4)); t.bleed += s; log(`${tag}: +${s} bleed on ${t.name}`, "hit"); }
+    if (t) {
+      let s = Math.max(1, Math.floor(value / 4));
+      s *= (loadout.bleedMult || 1);  // Blood for the Bloodgod 2pc
+      t.bleed += s; log(`${tag}: +${s} bleed on ${t.name}`, "hit");
+    }
   } else if (effect === "block") {
     // Block buys damage at half rate; at parity a defensive build never gets hit.
     const amt = Math.max(1, Math.floor(value / 2));
@@ -1001,14 +1182,23 @@ function applyEffect(effect, value, tag) {
     const healed = Math.min(amt, player.maxHp - player.hp);
     player.hp += healed;
     const over = amt - healed;
+    const cap = Math.floor(player.maxHp / 2);
     let gained = 0;
     if (over > 0) {
-      const cap = Math.floor(player.maxHp / 2);
       gained = Math.max(0, Math.min(over, cap - player.shield));
       player.shield += gained;
     }
-    if (healed && gained > 0) log(`${tag}: +${healed} health, +${gained} shield`, "good");
-    else if (gained > 0) log(`${tag}: +${gained} shield`, "good");
+    let bonusShield = 0;
+    if (loadout.lifestealGrantsShield && healed) {
+      // Pharaoh's Curse 2pc: lifesteal now ALSO grants shield equal to the
+      // amount actually healed -- unconditionally, not just as overflow
+      // past full hp.
+      bonusShield = Math.max(0, Math.min(healed, cap - player.shield));
+      player.shield += bonusShield;
+    }
+    const totalShield = gained + bonusShield;
+    if (healed && totalShield > 0) log(`${tag}: +${healed} health, +${totalShield} shield`, "good");
+    else if (totalShield > 0) log(`${tag}: +${totalShield} shield`, "good");
     else log(`${tag}: +${healed} health`, "good");
   } else if (effect === "mana") {
     player.mana += value; log(`${tag}: +${value} mana`, "good");
@@ -1032,6 +1222,151 @@ function stunTarget() {
   return [cur, false];
 }
 
+/* Place `count` seeded gems (see SEEDED_GEMS) onto random board cells,
+   overwriting whatever was there. Shared by the Minor "spawn void gems"
+   trigger and Void's Gift's own passive spawning. */
+function seedGems(color, count) {
+  const cells = [];
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) cells.push([r, c]);
+  for (let i = cells.length - 1; i > 0; i--) {
+    const j = rnd(i + 1); [cells[i], cells[j]] = [cells[j], cells[i]];
+  }
+  let placed = 0;
+  for (const [r, c] of cells.slice(0, count)) { board[r][c] = color; placed++; }
+  return placed;
+}
+
+/* Void ('X') gem: a hardcoded effect, not bound to the player's own colour
+   picks. See SEEDED_GEMS. */
+function applySeededGem(color, gemCount, tag) {
+  const t = currentTarget();
+  if (!t) return;
+  if (color === "X") {
+    const value = Math.floor(gemCount * PER_GEM * VOID_STRENGTH * valueMult);
+    t.hp -= value;
+    const selfhit = Math.max(1, Math.floor(value * VOID_SELFHIT_FRAC));
+    player.hp -= selfhit;
+    log(`${tag}: void gem hits ${t.name} for ${value} (and you for ${selfhit})`, "hit");
+    if (loadout.voidGift) {
+      // 4pc: matched void gems spawn more, and void cascades chip
+      // everything on the board (living enemies) for a flat 1.
+      const placed = seedGems("X", 1);
+      for (const e of living()) e.hp -= 1;
+      if (placed) log(`${tag}: void cascade seeds another void gem, 1 damage to all enemies`, "hit");
+    }
+  }
+}
+
+/* Directly place `shape` as a dormant special onto `count` random cells
+   that don't already hold one -- for specials that arise from a tier-piece
+   hook rather than an actual match (Apocetharys Garb's poison gem). Sits
+   on top of whatever colour the cell already is, same as a match-made
+   special would. */
+function placeSpecial(shape, count) {
+  count = count || 1;
+  const empties = [];
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) if (!special[r][c]) empties.push([r, c]);
+  for (let i = empties.length - 1; i > 0; i--) {
+    const j = rnd(i + 1); [empties[i], empties[j]] = [empties[j], empties[i]];
+  }
+  let placed = 0;
+  for (const [r, c] of empties.slice(0, count)) { special[r][c] = shape; placed++; }
+  return placed;
+}
+
+/* Apocetharys Garb's poison special detonates -- single-target for 2pc;
+   with 4pc active, ANY poison gem instead hits every living enemy at once,
+   regardless of whether it was planted by a 4chain or 5chain. */
+function firePoisonGem() {
+  const aoe = loadout.apocetharys4pc;
+  const targets = aoe ? living() : (currentTarget() ? [currentTarget()] : []);
+  if (!targets.length) return;
+  const pct = Math.round(POISON_PCT_MAX_HP * 100);
+  if (aoe) {
+    let total = 0;
+    for (const e of targets) { const dmg = Math.floor(e.maxHp * POISON_PCT_MAX_HP); e.hp -= dmg; total += dmg; }
+    log(`** poison gem detonates on every enemy for ${pct}% max hp each (${total} total)`, "spec");
+  } else {
+    const e = targets[0];
+    const dmg = Math.floor(e.maxHp * POISON_PCT_MAX_HP);
+    e.hp -= dmg;
+    log(`** poison gem detonates on ${e.name} for ${dmg} (${pct}% max hp)`, "spec");
+  }
+}
+
+/* Called after anything that might have just killed an enemy. Not a fully
+   centralised on-death hook (damage is dealt from many call sites) --
+   checked at the main resolution checkpoints instead. */
+function checkAceOfClubs() {
+  if (!loadout.aceOfClubs) return;
+  let newlyDead = enemies.filter(e => e.hp <= 0 && !e.exploded);
+  let guard = 0;
+  while (newlyDead.length && guard++ < 20) {
+    const e = newlyDead.shift();
+    e.exploded = true;
+    const others = enemies.filter(o => o !== e && o.hp > 0);
+    if (!others.length) continue;
+    const dmg = Math.max(1, Math.floor(e.maxHp * ACE_OF_CLUBS_EXPLODE_FRAC));
+    others.forEach(o => o.hp -= dmg);
+    log(`** ${e.name} explodes for ${dmg} to ${others.length} other enem${others.length === 1 ? "y" : "ies"}`, "spec");
+    newlyDead = newlyDead.concat(others.filter(o => o.hp <= 0 && !o.exploded));
+  }
+}
+
+/* One stun's worth of stagger against `victim` -- shared by the "stun"
+   trigger and freeze's threshold conversion, so a big enemy's `resolve`
+   meter gates both identically. */
+function applyStagger(victim, tag, note) {
+  note = note || "";
+  if (victim.resolve > 1) {
+    // Every stun ticks the meter -- even while the enemy is already down.
+    // Extending a big enemy's stun costs as much as causing it, or one
+    // stun a turn re-locks a staggered dragon forever.
+    victim.stunMeter += 1;
+    if (victim.stunMeter >= victim.resolve) {
+      victim.stunMeter = 0;
+      victim.stunned += 1;
+      const what = victim.stunned > 1 ? `stun extended (now ${victim.stunned} turns)` : "stunned";
+      log(`>> ${tag} TRIGGER: ${victim.name} staggers — ${what}${note}`, "spec");
+    } else {
+      log(`>> ${tag} TRIGGER: ${victim.name} staggers (${victim.stunMeter}/${victim.resolve})${note}`, "spec");
+    }
+  } else {
+    victim.stunned += 1;
+    const full = victim.stunned > 1 && !note ? ` (now ${victim.stunned} turns)` : note;
+    log(`>> ${tag} TRIGGER: ${victim.name} stunned${full}`, "spec");
+  }
+}
+
+/* One freeze stack against `victim` -- shared by the Minor "freeze" trigger
+   and the "Freeze Blast" spell. At FREEZE_STACKS_THRESHOLD, overflow
+   carries (not wasted) and converts into one stagger via the same meter as
+   a normal stun. */
+function applyFreeze(victim, tag) {
+  victim.freezeStacks += 1;
+  if (victim.freezeStacks >= FREEZE_STACKS_THRESHOLD) {
+    victim.freezeStacks -= FREEZE_STACKS_THRESHOLD;
+    applyStagger(victim, tag, " (frozen solid)");
+  } else {
+    log(`>> ${tag}: ${victim.name} freezing ${victim.freezeStacks}/${FREEZE_STACKS_THRESHOLD}`, "spec");
+  }
+}
+
+/* Public entry point -- wraps fireTriggerOnce with Power "swipe_multiplier":
+   while triggerRepeat > 1 (set for exactly one swipe, see attemptSwap),
+   every trigger that fires during that swipe's whole cascade fires that
+   many times, not just the first. */
+function fireTrigger(trigger, value, tag, color, otherShape, otherColor) {
+  const times = triggerRepeat > 1 ? triggerRepeat : 1;
+  let extraCleared = [];
+  for (let i = 0; i < times; i++) {
+    const tTag = times === 1 ? tag : `${tag} (x${i + 1}/${times})`;
+    extraCleared = extraCleared.concat(
+      fireTriggerOnce(trigger, value, tTag, color, otherShape, otherColor) || []);
+  }
+  return extraCleared;
+}
+
 /* `color` is the detonating gem's own colour (needed by color_boost).
    `otherShape`/`otherColor` describe the OTHER half of a fusion when this
    trigger fired as part of one (needed by wildcard) -- both are null
@@ -1040,31 +1375,11 @@ function stunTarget() {
    converted line5 re-trigger wildcard on detonation and recurse forever).
    Returns an array of extra [r, c] cells cleared as a side effect (only
    wildcard produces any) so callers can fold them into their own collapse. */
-function fireTrigger(trigger, value, tag, color, otherShape, otherColor) {
+function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
   const t = currentTarget();
   if (trigger === "stun") {
     const [victim, redirected] = stunTarget();
-    if (victim) {
-      const note = redirected ? " (redirected)" : "";
-      if (victim.resolve > 1) {
-        // Every stun ticks the meter — even while the enemy is already down.
-        // Extending a big enemy's stun costs as much as causing it, or one
-        // stun a turn re-locks a staggered dragon forever.
-        victim.stunMeter += 1;
-        if (victim.stunMeter >= victim.resolve) {
-          victim.stunMeter = 0;
-          victim.stunned += 1;
-          const what = victim.stunned > 1 ? `stun extended (now ${victim.stunned} turns)` : "stunned";
-          log(`>> ${tag} TRIGGER: ${victim.name} staggers — ${what}${note}`, "spec");
-        } else {
-          log(`>> ${tag} TRIGGER: ${victim.name} staggers (${victim.stunMeter}/${victim.resolve})${note}`, "spec");
-        }
-      } else {
-        victim.stunned += 1;
-        const full = !redirected && victim.stunned > 1 ? ` (now ${victim.stunned} turns)` : note;
-        log(`>> ${tag} TRIGGER: ${victim.name} stunned${full}`, "spec");
-      }
-    }
+    if (victim) applyStagger(victim, tag, redirected ? " (redirected)" : "");
   } else if (trigger === "bleed_burst" && t) {
     const s = Math.max(2, Math.floor(value / 3));
     t.bleed += s; log(`>> ${tag} TRIGGER: +${s} bleed burst`, "spec");
@@ -1152,8 +1467,83 @@ function fireTrigger(trigger, value, tag, color, otherShape, otherColor) {
       if (eff) applyEffect(eff, boosted, wtag);
     }
     const otherTrigger = loadout.shapes[baseShape(otherShape)];
-    if (otherTrigger) return fireTrigger(otherTrigger, boosted, wtag) || [];
+    if (otherTrigger) return fireTriggerOnce(otherTrigger, boosted, wtag) || [];
     return [];
+
+  // ---- 2026-07-31 batch: Sockets/Tier pieces/Spells/Status sheets ----
+
+  } else if (trigger === "bleed_replicate") {
+    // Minor: the hardest-bleeding enemy's stack count is copied onto a
+    // DIFFERENT living enemy (additively) -- spreads bleed rather than
+    // moving it.
+    const bleeding = living().filter(e => e.bleed);
+    if (bleeding.length) {
+      const source = bleeding.reduce((a, b) => (b.bleed > a.bleed ? b : a));
+      const candidates = living().filter(e => e !== source);
+      if (candidates.length) {
+        const victim = pick(candidates);
+        victim.bleed += source.bleed;
+        log(`>> ${tag} TRIGGER: ${source.name}'s ${source.bleed} bleed replicates onto ${victim.name}`, "spec");
+      }
+    }
+  } else if (trigger === "heal_last_turn") {
+    const amount = Math.round(player.dmgTakenLastTurn * HEAL_LAST_TURN_FRAC);
+    if (amount) {
+      const healed = Math.min(amount, player.maxHp - player.hp);
+      player.hp += healed;
+      log(`>> ${tag} TRIGGER: heal ${healed} (70% of last turn's ${player.dmgTakenLastTurn} lost)`, "good");
+    }
+  } else if (trigger === "restore_mana_minor" || trigger === "restore_mana_major") {
+    const amount = trigger === "restore_mana_minor" ? MINOR_MANA_RESTORE : MAJOR_MANA_RESTORE;
+    player.mana += amount;
+    log(`>> ${tag} TRIGGER: +${amount} mana`, "good");
+  } else if (trigger === "restore_health_minor" || trigger === "restore_health_major") {
+    const amount = trigger === "restore_health_minor" ? MINOR_HEAL_RESTORE : MAJOR_HEAL_RESTORE;
+    const healed = Math.min(amount, player.maxHp - player.hp);
+    player.hp += healed;
+    log(`>> ${tag} TRIGGER: +${healed} health`, "good");
+  } else if (trigger === "spawn_void_minor") {
+    const placed = seedGems("X", MINOR_VOID_GEM_SPAWN);
+    if (placed) log(`>> ${tag} TRIGGER: spawns ${placed} void gem(s)`, "spec");
+  } else if (trigger === "freeze") {
+    if (t) applyFreeze(t, tag);
+  } else if (trigger === "bleed_spike_all") {
+    // Major: like bleed_spike, but ALL bleeding enemies pop at once, none
+    // of them losing their stacks.
+    const bleeding = living().filter(e => e.bleed);
+    if (bleeding.length) {
+      let total = 0;
+      bleeding.forEach(e => { const burst = e.bleed * 3; e.hp -= burst; total += burst; });
+      log(`>> ${tag} TRIGGER: bleed spikes on ${bleeding.length} enem${bleeding.length === 1 ? "y" : "ies"} for ${total} total (stacks kept)`, "spec");
+    } else if (t) {
+      const s = Math.max(2, Math.floor(value / 3));
+      t.bleed += s;
+      log(`>> ${tag} TRIGGER: nothing to spike — opens ${s} bleed instead`, "spec");
+    }
+  } else if (trigger === "confuse") {
+    if (t) {
+      t.confused = true;
+      log(`>> ${tag} TRIGGER: ${t.name} is confused — its next attack targets another enemy`, "spec");
+    }
+  } else if (trigger === "phantom_blade") {
+    player.phantomBladeTurns = PHANTOM_BLADE_TURNS;
+    log(`>> ${tag} TRIGGER: a phantom blade replicates Red/Yellow attacks for ${PHANTOM_BLADE_TURNS} turns`, "spec");
+  } else if (trigger === "swipe_multiplier") {
+    player.nextSwipeTriggerMult = SWIPE_MULT_TRIGGER_COUNT;
+    log(`>> ${tag} TRIGGER: your next swipe's triggers fire ${SWIPE_MULT_TRIGGER_COUNT}x`, "spec");
+  } else if (trigger === "damage_negate") {
+    player.dmgNegateNextTurn = true;
+    log(`>> ${tag} TRIGGER: next turn's damage is negated and reflected`, "spec");
+  } else if (trigger === "deathmark") {
+    let hitAny = false;
+    for (const e of living()) {
+      if (e.hp > DEATHMARK_ENEMY_HP) e.hp = DEATHMARK_ENEMY_HP;
+      hitAny = true;
+    }
+    if (hitAny) {
+      player.deathmarkActive = true;
+      log(`>> ${tag} TRIGGER: DEATHMARK — every enemy is at ${DEATHMARK_ENEMY_HP} hp. Clear the field before your next turn ends, or you die.`, "spec");
+    }
   }
   return [];
 }
@@ -1186,6 +1576,14 @@ function detonateAll(fuse) {
   while (fuse.length && guard++ < 40) {
     const [shape, r, c] = fuse.shift();
     special[r][c] = null;                  // never let a blast relight its source
+
+    // Apocetharys Garb's poison gem (see placeSpecial/firePoisonGem) is a
+    // dormant utility special, not a genuine chain-gem family -- catching
+    // it in a cascade's blast is one of its two activation routes (the
+    // other is a direct swipe-fusion, see doFuse). It has no colour
+    // payout, no player-picked trigger, and no blast of its own.
+    if (shape === "poison") { firePoisonGem(); continue; }
+
     const color = board[r][c];
     const value = Math.floor(SPECIAL_GEMS * PER_GEM * SHAPE_MULT[shape] * valueMult);
     const tag = `${shape} SPECIAL`;
@@ -1331,6 +1729,23 @@ function doFuse(r1, c1, r2, c2) {
   const colours = new Set([colorA, colorB]);
   special[r1][c1] = null; special[r2][c2] = null;
 
+  // Apocetharys Garb's poison gem isn't a real chain-gem family, so it sits
+  // outside the fusionPair/comboBlast machinery entirely -- swiping it into
+  // ANYTHING activates it directly (one of its two activation routes; a
+  // cascade catching it is the other, see detonateAll). Whatever it was
+  // swiped into still detonates normally on its own if it's a genuine
+  // special.
+  if (a === "poison" || b === "poison") {
+    log("!! FUSION: poison gem activates", "combo");
+    let blasted = [];
+    for (const [shape, r, c] of [[a, r1, c1], [b, r2, c2]]) {
+      if (shape === "poison") { firePoisonGem(); blasted.push([r, c]); }
+      else if (shape) blasted = blasted.concat(detonateAll([[shape, r, c]]));
+    }
+    collapse(blasted);
+    return;
+  }
+
   const famA = baseShape(a), famB = baseShape(b);
   const pair = fusionPair(famA, famB);
   stats.fusions++;
@@ -1363,6 +1778,11 @@ function doFuse(r1, c1, r2, c2) {
   // line5 + line5 is the rarest pairing measured and gets a qualitative
   // reward, not just a bigger number.
   const ignite = sameFamily && famA === "line5";
+  // Ultimate socket: an ADDITIONAL player-picked payoff on the same
+  // rarest-pairing event, alongside (not instead of) the ignite freebie.
+  if (ignite && loadout.shapes.ultimate) {
+    fireTrigger(loadout.shapes.ultimate, value, `${famA}+${famB} ULTIMATE`);
+  }
   const rareNote = rarity === 1.0 ? "" : "  [rarity x" + rarity + "]";
   log("!! FUSION: " + shown + " -- " + label + rareNote, "combo");
   const blasted = comboDetonate(a, colours, cells, {
@@ -1395,15 +1815,34 @@ async function resolveBoard() {
       stats.shapes[shape] = (stats.shapes[shape] || 0) + 1;
       totalMatches++; totalGems += cells.length;
       if (firstMatchGems === null) firstMatchGems = cells.length;
-      // Set bonuses keyed on a specific colour fire regardless of whether
-      // that colour also has an ordinary effect bound (Archmage's blue has
-      // none at all), so these must not sit behind the effect check below.
-      if (color === loadout.locustColor) player.locusts += cells.length;
-      if (color === loadout.wildChargeColor) player.wildCharges += cells.length;
-
-      const effect = loadout.colors[color];
       const tag = chain === 1 ? shape : `${shape} (cascade ${chain})`;
-      if (effect) applyEffect(effect, Math.floor(cells.length * PER_GEM * valueMult), tag);
+
+      // Seeded gems (void/poison, see SEEDED_GEMS) are not one of the
+      // player's kit colours -- they have their own hardcoded effect and
+      // never consult loadout.colors at all, same as Python's apply_base().
+      if (SEEDED_GEMS.has(color)) {
+        applySeededGem(color, cells.length, tag);
+      } else {
+        // Set bonuses keyed on a specific colour fire regardless of whether
+        // that colour also has an ordinary effect bound (Archmage's blue
+        // has none at all), so these must not sit behind the effect check
+        // below.
+        if (color === loadout.locustColor) player.locusts += cells.length;
+        if (color === loadout.wildChargeColor) player.wildCharges += cells.length;
+
+        // Void's Gift 2pc: every 3 blue gems matched spawns a void gem --
+        // independent of whatever blue is actually bound to.
+        if (color === "B" && loadout.voidGift) {
+          const n = Math.floor(cells.length / 3);
+          if (n) {
+            const placed = seedGems("X", n);
+            if (placed) log(`${tag}: Void's Gift seeds ${placed} void gem(s)`, "spec");
+          }
+        }
+
+        const effect = loadout.colors[color];
+        if (effect) applyEffect(effect, Math.floor(cells.length * PER_GEM * valueMult), tag);
+      }
 
       for (const [r, c] of cells) {
         if (special[r][c]) { fuse.push([special[r][c], r, c]); special[r][c] = null; }
@@ -1414,6 +1853,28 @@ async function resolveBoard() {
         special[anchor[0]][anchor[1]] = shape;
         stats.specials++;
         log(`++ ${shape} leaves a special ${color} gem (${BLAST_DESC[shape]})`, "spec");
+        if (shape === "line4" && loadout.apocetharys2pc) {
+          const placed = placeSpecial("poison", APOCETHARYS_GEMS_PER_PROC);
+          if (placed) log(`++ Apocetharys Garb plants ${placed} dormant poison gem(s) on the board`, "spec");
+        }
+        if (shape === "line5" && loadout.apocetharys4pc) {
+          const placed = placeSpecial("poison", APOCETHARYS_GEMS_PER_PROC);
+          if (placed) log(`++ Apocetharys Garb plants ${placed} dormant poison gem(s) on the board (5chain)`, "spec");
+        }
+      } else if (shape === "line3" && player.gambleNextLine3) {
+        // Spell "Gambler's Gambit": the next plain 3-match doesn't just pay
+        // its usual flat value -- it ALSO leaves a special gem of a random
+        // shape, same as a genuine 4/L/T/5 match would, weighted toward
+        // the common shapes with a rare (10%) shot at a line5.
+        player.gambleNextLine3 = false;
+        const pool = Object.keys(GAMBLE_SHAPE_WEIGHTS);
+        const weights = pool.map(s => GAMBLE_SHAPE_WEIGHTS[s]);
+        const totalWeight = weights.reduce((a, b) => a + b, 0);
+        let roll = Math.random() * totalWeight, gambleShape = pool[pool.length - 1];
+        for (let i = 0; i < pool.length; i++) { if ((roll -= weights[i]) < 0) { gambleShape = pool[i]; break; } }
+        anchor = anchorOf(cells);
+        special[anchor[0]][anchor[1]] = gambleShape;
+        log(`++ Gamblers Gambit: 3-match gambles into a special ${color} ${gambleShape} gem (${BLAST_DESC[gambleShape]})`, "spec");
       }
       for (const [r, c] of cells) {
         if (!anchor || r !== anchor[0] || c !== anchor[1]) clear.add(key(r, c));
@@ -1446,6 +1907,7 @@ async function resolveBoard() {
   }
   if (!hasMove(board)) { reshuffle(); log("no moves left -- board reshuffled"); render(true); }
   if (loadout.cascadeBonus) fireCascadeBonus(totalMatches, totalGems, firstMatchGems || 0);
+  checkAceOfClubs();
   return chain;
 }
 
@@ -1526,6 +1988,19 @@ function resolveSpellEffect(name, factor, chaotic) {
     living().forEach(e => e.hp -= dmg);
     return { text: `thunder hits everything for ${dmg}${boosted}`, cls: "hit" };
   }
+  if (name === "gamble") {
+    player.gambleNextLine3 = true;
+    return { text: "the next 3-match is a gamble — it'll also leave a random chain gem", cls: "good" };
+  }
+  if (name === "acid") {
+    const dmg = Math.round(ACID_DMG_PER_TURN * factor);
+    for (const e of living()) { e.acidTurns = ACID_TURNS; e.acidDmg = dmg; }
+    return { text: `acid rain corrodes everything for ${dmg}/turn, ${ACID_TURNS} turns${boosted}`, cls: "hit" };
+  }
+  if (name === "freeze") {
+    for (const e of living()) applyFreeze(e, "Freeze blast");
+    return { text: `freeze blast chills everything${boosted}`, cls: "hit" };
+  }
   return { text: "?", cls: "good" };
 }
 
@@ -1575,6 +2050,7 @@ async function endTurn() {
   }
 
   const threshold = loadout.wildChargeThreshold;
+  let castsThisTurn = 0;
   if (threshold && player.wildCharges >= threshold) {
     let fires = Math.floor(player.wildCharges / threshold);
     player.wildCharges %= threshold; // overflow carries, not wasted
@@ -1586,7 +2062,19 @@ async function endTurn() {
       // were saving for your own next cast, which reads as "it just
       // vanished" if you don't notice the log line explaining why.
       const spentBuff = player.doubleNext || player.spellBuffStacks > 0;
-      const factor = consumeSpellBuffs();
+      let factor = consumeSpellBuffs();
+      castsThisTurn++;
+      player.wildChargeCastCount++;
+      // Archmage 4pc: every Nth LIFETIME cast doubles; more than
+      // ARCHMAGE_DOUBLE_EVERY_NTH_CAST casts in one turn each carry a small
+      // implode chance.
+      if (loadout.archmageOverload) {
+        if (player.wildChargeCastCount % ARCHMAGE_DOUBLE_EVERY_NTH_CAST === 0) factor *= 2;
+        if (castsThisTurn > ARCHMAGE_DOUBLE_EVERY_NTH_CAST && Math.random() < ARCHMAGE_IMPLODE_CHANCE) {
+          for (const e of living()) e.hp -= ARCHMAGE_IMPLODE_DAMAGE;
+          log(`wild charge overloads -- implodes for ${ARCHMAGE_IMPLODE_DAMAGE} to everything`, "hit");
+        }
+      }
       const result = resolveSpellEffect(name, factor, true);
       log(`wild charge erupts -- ${name}: ${result.text}`
         + (spentBuff ? " (spent your banked spell buff)" : ""), result.cls);
@@ -1595,8 +2083,20 @@ async function endTurn() {
 
   log("— enemy turn —", "turn");
   for (const e of living()) {
-    if (e.bleed) { e.hp -= e.bleed; log(`${e.name} bleeds for ${e.bleed}`, "good"); }
+    if (e.bleed) {
+      e.hp -= e.bleed; log(`${e.name} bleeds for ${e.bleed}`, "good");
+      if (loadout.bleedGrantsMana) {
+        const gained = e.bleed * BLOODGOD_MANA_PER_BLEED_DMG;
+        player.mana += gained;
+        log(`the bloodgod grants +${gained} mana`, "good");
+      }
+    }
+    if (e.acidTurns > 0) {
+      e.hp -= e.acidDmg; e.acidTurns--;
+      log(`${e.name} corrodes for ${e.acidDmg} (${e.acidTurns} turn(s) left)`, "hit");
+    }
   }
+  let negatedTotal = 0;
   for (const e of living()) {
     if (e.stunned) { e.stunned--; log(`${e.name} is stunned and loses its action`, "good"); continue; }
     e.countdown--;
@@ -1608,6 +2108,19 @@ async function endTurn() {
         queueNext(e);
         continue;
       }
+      if (e.confused) {
+        // Major "confuse": this attack never reaches the player at all --
+        // it lands on a different living enemy instead.
+        e.confused = false;
+        const others = living().filter(o => o !== e);
+        if (others.length) {
+          const victim = pick(others);
+          victim.hp -= dmg;
+          log(`${e.name} uses ${label}, confused, and hits ${victim.name} for ${dmg}`, "hit");
+          queueNext(e);
+          continue;
+        }
+      }
       const blocked = Math.min(player.block, dmg);
       player.block -= blocked;
       const soaked = Math.min(player.armour, dmg - blocked);
@@ -1615,19 +2128,81 @@ async function endTurn() {
       const shielded = Math.min(player.shield, dmg - blocked - soaked);
       player.shield -= shielded;
       const taken = dmg - blocked - soaked - shielded;
+
+      if (player.dmgNegateNextTurn) {
+        // Power "damage negate": fully negated, tallied up to reflect back
+        // once the whole turn's attacks are known.
+        negatedTotal += taken;
+        log(`${e.name} uses ${label}: negated entirely`, "good");
+        queueNext(e);
+        continue;
+      }
+
+      if (taken >= player.hp && loadout.razorsEnd && !player.cheatedDeath) {
+        // Razor's End 2pc: a would-be-lethal hit leaves you at 1 instead --
+        // once per encounter, not every time.
+        player.cheatedDeath = true;
+        player.hp = 1;
+        log(`${e.name} uses ${label}: would be lethal — Razor's End leaves you at 1 hp`, "good");
+        queueNext(e);
+        continue;
+      }
+
       player.hp -= taken;
+      player.dmgTakenThisTurn += taken;
+      let thornNote = "";
+      if (taken && loadout.roseThorns) {
+        const reflected = Math.max(1, Math.round(taken * ROSE_THORNS_REFLECT_FRAC));
+        e.hp -= reflected;
+        thornNote = `, ${reflected} reflected back`;
+        if (loadout.roseThornsBleed) {
+          const s = Math.max(1, Math.floor(reflected / 4));
+          e.bleed += s;
+          thornNote += ` (+${s} bleed)`;
+        }
+      }
       const parts = [];
       if (blocked) parts.push(`${blocked} blocked`);
       if (soaked) parts.push(`${soaked} soaked by armour`);
       if (shielded) parts.push(`${shielded} absorbed by shield`);
       log(`${e.name} uses ${label}: ${taken} damage` +
-        (parts.length ? ` (${parts.join(", ")})` : ""), "hit");
+        (parts.length ? ` (${parts.join(", ")})` : "") + thornNote, "hit");
       queueNext(e);
     }
   }
+
+  if (negatedTotal) {
+    const livingNow = living();
+    if (livingNow.length) {
+      const each = Math.floor(negatedTotal / livingNow.length);
+      const remainder = negatedTotal - each * livingNow.length;
+      livingNow.forEach((e, i) => { e.hp -= each + (i < remainder ? 1 : 0); });
+      log(`negated damage reflected -- ${negatedTotal} split across ${livingNow.length} enem${livingNow.length === 1 ? "y" : "ies"}`, "good");
+    }
+    player.dmgNegateNextTurn = false;
+  }
+
+  if (player.deathmarkActive) {
+    if (living().length) {
+      player.hp = 0;
+      log("DEATHMARK claims you — the field was not cleared in time", "hit");
+    } else {
+      log("DEATHMARK cleared — the field is empty, you survive", "good");
+    }
+    player.deathmarkActive = false;
+  }
+
+  if (player.phantomBladeTurns > 0) player.phantomBladeTurns--;
+
+  checkAceOfClubs();  // locusts/wild-charge/bleed/acid/thorns could all have just killed something
+
   stats.dmgTaken += Math.max(0, hpBefore - player.hp);
   player.block = 0;
   player.dodgeStacks = 0;  // dodge stacks count only WITHIN a turn, unlike banked dodgeCharges
+  player.tactician2pcUsedThisTurn = 0;
+  player.tactician4pcUsedThisTurn = 0;
+  player.dmgTakenLastTurn = player.dmgTakenThisTurn;
+  player.dmgTakenThisTurn = 0;
   swipes = SWIPES_PER_TURN;
   // spellBuffStacks, doubleNext, nextSpellFree, and banked dodgeCharges all
   // persist until actually spent -- banked buffs for "whenever I next
@@ -1916,9 +2491,31 @@ async function attemptSwap(r1, c1, r2, c2) {
     swipes--;
     const doubled = player.doubleNextSwipe;
     if (doubled) { valueMult = 2; player.doubleNextSwipe = false; }
-    await resolveBoard();
+    const repeat = player.nextSwipeTriggerMult;
+    if (repeat > 1) { triggerRepeat = repeat; player.nextSwipeTriggerMult = 1; }
+    const chain = await resolveBoard();
     valueMult = 1;
+    triggerRepeat = 1;
     if (doubled) log("(swipe was DOUBLED)", "good");
+    if (repeat > 1) log(`(triggers fired x${repeat})`, "good");
+
+    if (chain === 1 && loadout.tacticianRegalia) {
+      // Tactician's Regalia: a swipe that didn't cascade at all is
+      // rewarded instead of wasted -- capped per turn on each half.
+      if (player.tactician2pcUsedThisTurn < TACTICIAN_2PC_MAX_PER_TURN) {
+        player.tactician2pcUsedThisTurn++;
+        const rr = rnd(SIZE), rc = rnd(SIZE);
+        if (!special[rr][rc]) {
+          special[rr][rc] = "line4";
+          log("Tactician's Regalia: no cascade -- a random gem becomes a 4chain", "spec");
+        }
+      }
+      if (player.tactician4pcUsedThisTurn < TACTICIAN_4PC_MAX_PER_TURN) {
+        player.tactician4pcUsedThisTurn++;
+        swipes++;
+        log("Tactician's Regalia: no cascade -- +1 swipe", "spec");
+      }
+    }
   }
   busy = false;
   document.getElementById("board").classList.remove("resolving");
@@ -2000,6 +2597,16 @@ function previewSwap(r1, c1, r2, c2) {
   const hits = findMatches(board).filter(m =>
     m.cells.some(([r, c]) => (r === r1 && c === c1) || (r === r2 && c === c2)));
   const out = hits.map(m => {
+    if (SEEDED_GEMS.has(m.color)) {
+      // Seeded gems (void/poison) aren't bound to loadout.colors -- their
+      // preview is the same fixed icon rendered on the board.
+      return {
+        icon: SEEDED_GEM_ICON[m.color] || "?",
+        value: m.cells.length,
+        leaves: MAKES_SPECIAL.has(m.shape) ? MARK[m.shape] : null,
+        trigger: loadout.shapes[baseShape(m.shape)] || null,
+      };
+    }
     const effect = effectLabel(loadout, m.color);
     if (effect === "wild_charge") {
       // No ordinary effect -- the honest preview is "this many charges."
@@ -2131,7 +2738,7 @@ function render(fresh) {
     }
     const ic = document.createElement("span");
     ic.className = "icon";
-    ic.textContent = EFFECT_ICON[effectLabel(loadout, board[r][c])] || "";
+    ic.textContent = SEEDED_GEM_ICON[board[r][c]] || EFFECT_ICON[effectLabel(loadout, board[r][c])] || "";
     d.appendChild(ic);
     el.appendChild(d);
   }
@@ -2163,6 +2770,11 @@ function render(fresh) {
   if (player.dodgeStacks) buffs.push(`DODGE ${player.dodgeStacks}/${DODGE_STACKS_THRESHOLD}`);
   if (player.locusts) buffs.push(`${player.locusts} LOCUST(S) BANKED`);
   if (player.wildCharges) buffs.push(`${player.wildCharges} WILD CHARGE (of ${loadout.wildChargeThreshold})`);
+  if (player.phantomBladeTurns) buffs.push(`PHANTOM BLADE: ${player.phantomBladeTurns} turn(s) left`);
+  if (player.nextSwipeTriggerMult > 1) buffs.push(`NEXT SWIPE TRIGGERS x${player.nextSwipeTriggerMult}`);
+  if (player.dmgNegateNextTurn) buffs.push("NEXT TURN'S DAMAGE NEGATED");
+  if (player.deathmarkActive) buffs.push("DEATHMARK ACTIVE -- CLEAR THE FIELD OR DIE");
+  if (player.gambleNextLine3) buffs.push("NEXT 3-MATCH IS A GAMBLE");
   q("buffs").innerHTML = buffs.map(b => `<div class="buff">${b}</div>`).join("");
 
   q("spells").innerHTML = availableSpells().map(n => {
@@ -2225,6 +2837,18 @@ function startEncounter() {
   player.nextSpellFree = false;
   player.dodgeStacks = 0;
   player.dodgeCharges = 0;
+  player.dmgTakenThisTurn = 0;
+  player.dmgTakenLastTurn = 0;
+  player.cheatedDeath = false;         // Razor's End 2pc -- a fresh chance every encounter
+  player.phantomBladeTurns = 0;
+  player.nextSwipeTriggerMult = 1;
+  player.dmgNegateNextTurn = false;
+  player.deathmarkActive = false;
+  player.tactician2pcUsedThisTurn = 0;
+  player.tactician4pcUsedThisTurn = 0;
+  player.gambleNextLine3 = false;
+  // wildChargeCastCount is NOT reset here -- Archmage 4pc's "every Nth cast"
+  // is a LIFETIME count, not per-encounter.
   // Confirmed by the designer (2026-07-30): these reset per encounter, not
   // just per turn -- a banked buff persists across End Turn presses within
   // one fight, but does not carry into the next one.
@@ -2241,7 +2865,16 @@ function begin(picksArg, setKey) {
   loadout = buildLoadout(picksArg, setKey);
   player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
              shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0,
-             doubleNextSwipe: false, nextSpellFree: false, dodgeStacks: 0, dodgeCharges: 0 };
+             doubleNextSwipe: false, nextSpellFree: false, dodgeStacks: 0, dodgeCharges: 0,
+             dmgTakenThisTurn: 0, dmgTakenLastTurn: 0,
+             cheatedDeath: false,          // Razor's End 2pc -- once per encounter
+             wildChargeCastCount: 0,       // Archmage 4pc -- LIFETIME count, persists across encounters
+             phantomBladeTurns: 0,         // Power "phantom blade" -- turns remaining
+             nextSwipeTriggerMult: 1,      // Power "swipe activation trigger 5x" -- consumed after one swipe
+             dmgNegateNextTurn: false,     // Power "damage negate + reflect"
+             deathmarkActive: false,       // Ultimate "deathmark"
+             tactician2pcUsedThisTurn: 0, tactician4pcUsedThisTurn: 0,
+             gambleNextLine3: false };     // spell "Gambler's Gambit"
   encounter = 0;
   document.getElementById("setup").classList.add("hidden");
   document.getElementById("game").classList.remove("hidden");
@@ -2261,7 +2894,7 @@ function begin(picksArg, setKey) {
 /* ============================ setup screen ============================ */
 
 const COLOUR_NAME = { R: "Red", G: "Green", Y: "Yellow", B: "Blue" };
-let picks = { R: null, G: null, Y: null, B: null, line4: null, hardL: null, hardT: null, line5: null };
+let picks = { R: null, G: null, Y: null, B: null, line4: null, hardL: null, hardT: null, line5: null, ultimate: null };
 let pickedSet = null;
 
 function allSocketsFilled() {
@@ -2305,12 +2938,22 @@ function refreshSetupSelection() {
     c.classList.toggle("selected", picks[c.dataset.slot] === c.dataset.gem));
   document.querySelectorAll("#gemLine4 .card").forEach(c =>
     c.classList.toggle("selected", picks.line4 === c.dataset.gem));
-  document.querySelectorAll("#gemHardL .card").forEach(c =>
-    c.classList.toggle("selected", picks.hardL === c.dataset.gem));
-  document.querySelectorAll("#gemHardT .card").forEach(c =>
-    c.classList.toggle("selected", picks.hardT === c.dataset.gem));
+  // L and T share one pool but must be unique picks (designer's ask, 2026-
+  // 07-31): whichever gem is already taken by the OTHER hard-shape socket
+  // is greyed out and unclickable here, rather than allowing a duplicate
+  // and rejecting it after the fact.
+  document.querySelectorAll("#gemHardL .card").forEach(c => {
+    c.classList.toggle("selected", picks.hardL === c.dataset.gem);
+    c.classList.toggle("disabled", picks.hardT === c.dataset.gem);
+  });
+  document.querySelectorAll("#gemHardT .card").forEach(c => {
+    c.classList.toggle("selected", picks.hardT === c.dataset.gem);
+    c.classList.toggle("disabled", picks.hardL === c.dataset.gem);
+  });
   document.querySelectorAll("#gemLine5 .card").forEach(c =>
     c.classList.toggle("selected", picks.line5 === c.dataset.gem));
+  document.querySelectorAll("#gemUltimate .card").forEach(c =>
+    c.classList.toggle("selected", picks.ultimate === c.dataset.gem));
   document.querySelectorAll("#setCards .card").forEach(c =>
     c.classList.toggle("selected", c.dataset.k === pickedSet));
 
@@ -2340,20 +2983,40 @@ document.getElementById("gemHardT").innerHTML = HARD_SHAPE_TRIGGERS.map(trig =>
 document.getElementById("gemLine5").innerHTML = Object.keys(LINE5_GEMS).map(gem =>
   gemCardHtml("line5", gem, gem.replace(/_/g, " "), TRIGGER_DESC[gem])).join("");
 
+document.getElementById("gemUltimate").innerHTML = ULTIMATE_GEMS.map(gem =>
+  gemCardHtml("ultimate", gem, gem.replace(/_/g, " "), TRIGGER_DESC[gem])).join("");
+
 document.getElementById("setCards").innerHTML =
   Object.entries(SETS).map(([k, s]) => setCardHtml(k, s)).join("");
 document.getElementById("presetCards").innerHTML =
   Object.entries(PRESETS).map(([k, p]) => presetCardHtml(k, p)).join("");
 
-document.querySelectorAll("#colourSockets .card, #gemLine4 .card, #gemHardL .card, #gemHardT .card").forEach(c => c.onclick = () => {
+document.querySelectorAll("#colourSockets .card, #gemLine4 .card").forEach(c => c.onclick = () => {
   picks[c.dataset.slot] = c.dataset.gem;
   refreshSetupSelection();
 });
-// Optional socket, unlike the others -- click again to deselect (same
-// pattern as the tier-piece cards below), since going without a line5 gem
-// is a valid choice, not an unfilled requirement.
+// L and T share one pool but must be unique picks -- clicking a gem
+// already held by the other hard-shape socket is a no-op (the card is
+// shown greyed out via .disabled in refreshSetupSelection).
+document.querySelectorAll("#gemHardL .card").forEach(c => c.onclick = () => {
+  if (picks.hardT === c.dataset.gem) return;
+  picks.hardL = c.dataset.gem;
+  refreshSetupSelection();
+});
+document.querySelectorAll("#gemHardT .card").forEach(c => c.onclick = () => {
+  if (picks.hardL === c.dataset.gem) return;
+  picks.hardT = c.dataset.gem;
+  refreshSetupSelection();
+});
+// Optional sockets, unlike the others -- click again to deselect (same
+// pattern as the tier-piece cards below), since going without a line5/
+// ultimate gem is a valid choice, not an unfilled requirement.
 document.querySelectorAll("#gemLine5 .card").forEach(c => c.onclick = () => {
   picks.line5 = picks.line5 === c.dataset.gem ? null : c.dataset.gem;
+  refreshSetupSelection();
+});
+document.querySelectorAll("#gemUltimate .card").forEach(c => c.onclick = () => {
+  picks.ultimate = picks.ultimate === c.dataset.gem ? null : c.dataset.gem;
   refreshSetupSelection();
 });
 document.querySelectorAll("#setCards .card").forEach(c => c.onclick = () => {
