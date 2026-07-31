@@ -37,6 +37,11 @@
   }
   .card:hover { border-color: #55607a; transform: translateY(-2px); }
   .card.selected { border-color: #7fa6ff; box-shadow: 0 0 0 1px #7fa6ff inset; }
+  /* Tier pieces: a 2pc-only pick is blue like any other selection; picking
+     the same set a second time (full 2pc+4pc) gets its own gold accent so
+     the two states are visually distinct at a glance. */
+  .card.matched { border-color: #f0cf78; box-shadow: 0 0 0 1px #f0cf78 inset; }
+  .tier-badge { font-size: 11px; font-weight: 400; color: var(--dim); }
   /* L and T share one trigger pool but must hold different triggers --
      whichever one the other socket already picked shows greyed out here. */
   .card.disabled { opacity: .35; cursor: not-allowed; pointer-events: none; }
@@ -440,7 +445,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-07-31a";
+const GAME_VERSION = "2026-07-31b";
 
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
@@ -555,6 +560,37 @@ const ACID_TURNS = 3;              // ...for this many turns
 const ULTIMATE_GEMS = ["deathmark"];
 const DEATHMARK_ENEMY_HP = 5;   // "deathmark": every living enemy's hp is set to this
 
+// Yellow's second colour option: unlike every other colour effect,
+// "sharpen" isn't an immediate payout -- it banks a stack (like the
+// Lchain/Tchain "dodge" trigger does, just moved onto the colour-effect
+// axis for the first time) and the NEXT attack/bleed/splash effect to
+// resolve (from ANY source -- a different colour, a detonating special, a
+// spell) consumes every banked stack at once as a flat percent bonus, then
+// resets to zero. Kept small per stack since yellow, unlike a rare
+// chain-gem trigger, matches as often as any other colour.
+const SHARPEN_PCT_PER_STACK = 0.03;   // +3% next damage-dealing hit, per banked stack
+const SHARPEN_MAX_STACKS = 8;         // cap -- 8 stacks is +24% at once
+
+// "focus" (Blue/Yellow): same banked-stack shape as sharpen, but discounts
+// the NEXT manually-cast spell's mana cost instead of boosting the next
+// hit. Only affects a player-chosen cast() -- a free autonomous
+// wild-charge proc has no cost to discount in the first place.
+const FOCUS_PCT_PER_STACK = 0.05;   // -5% next spell's mana cost, per banked stack
+const FOCUS_MAX_STACKS = 6;         // cap -- 6 stacks is -30% at once
+
+// "execute" (Red/Yellow): a finisher -- direct damage that scales up with
+// how much of the TARGET's health is already missing (mirrors Razor's End
+// 4pc's own formula, aimed at the enemy instead of the player). At full
+// target health this is just a plain hit; it only starts outperforming
+// "attack" once the target is already hurting.
+const EXECUTE_BONUS_MULT_CAP = 2.5;   // damage multiplier at 0% target hp
+
+// "lifesteal" rework: the overflow-into-shield half of lifesteal now
+// converts at a WORSE rate than a dedicated Block pick, so a topped-off
+// lifesteal build isn't simply strictly better than block. Healing itself
+// is unchanged.
+const LIFESTEAL_SHIELD_RATE = 0.5;   // extra multiplier on the overflow-to-shield conversion
+
 // There are NO size tiers. An L is an L however long its arms were; the extra
 // length is its own reward in gems cleared, not a separate gem with a separate
 // number. Tiers were tried and removed as too much to hold in your head.
@@ -577,7 +613,8 @@ const MARK = { line4: "4", line5: "5", L: "L", T: "T", poison: "p" };
    what stays meaningful when a different loadout rebinds the colour. */
 const EFFECT_ICON = {
   attack: "✖", bleed: "≈", block: "▣", mana: "◆", splash: "∴",
-  armour: "▲", lifesteal: "♥", wild_charge: "✦",
+  armour: "▲", lifesteal: "♥", wild_charge: "✦", sharpen: "⚔",
+  execute: "†", focus: "❋",
 };
 // Seeded gems (see SEEDED_GEMS) aren't bound to loadout.colors at all -- a
 // fixed icon per colour letter, looked up directly instead of through
@@ -592,6 +629,14 @@ const EFFECT_DESC = {
   armour: "absorbs damage and KEEPS across turns (third rate)",
   lifesteal: "heals you (half rate); past full it builds a shield instead",
   wild_charge: "no direct effect -- builds toward a free random spell",
+  sharpen: `no direct effect -- banks a stack (up to ${SHARPEN_MAX_STACKS}); `
+    + `the next attack/bleed/splash/execute hit from ANY source consumes them all at once, `
+    + `+${Math.round(SHARPEN_PCT_PER_STACK * 100)}% per stack`,
+  execute: "damage to your target, boosted the more of ITS health is already missing (up to "
+    + `${Math.round(EXECUTE_BONUS_MULT_CAP * 100)}% at empty target hp)`,
+  focus: `no direct effect -- banks a stack (up to ${FOCUS_MAX_STACKS}); `
+    + `your next manually-cast spell consumes them all at once, `
+    + `-${Math.round(FOCUS_PCT_PER_STACK * 100)}% cost per stack`,
 };
 
 // What a colour is bound to, for display -- covers the case where a set
@@ -695,14 +740,17 @@ const SPELLS = {
 // exclusive to one colour (attack and bleed are red-only, per the designer's
 // own example), but a few (mana) are deliberately allowed in more than one
 // pool so a "red AND blue make mana" build stays possible as an emergent
-// choice instead of a fixed class. Yellow currently only has one real gem
-// (splash) since attack moved to red-exclusive -- a known thin spot, not a
-// bug, flagged for the designer to fill in with a second yellow-only effect.
+// choice instead of a fixed class. Yellow's second option, "sharpen", fills
+// the previously-flagged thin spot. "focus" is shared between Blue and
+// Yellow (same pattern as "lifesteal" on G/B and "mana" on R/B) so a
+// caster build can stack it from either side. "execute" is shared between
+// Red and Yellow -- a finisher tool distinct from attack's flat hit and
+// bleed's slow burn.
 const GEM_POOLS = {
-  R: ["attack", "bleed", "mana"],
+  R: ["attack", "bleed", "mana", "execute"],
   G: ["block", "lifesteal"],
-  Y: ["splash"],
-  B: ["armour", "lifesteal", "mana"],
+  Y: ["splash", "sharpen", "focus", "execute"],
+  B: ["armour", "lifesteal", "mana", "focus"],
 };
 
 // Line4 is always the build's frequent "heartbeat" trigger. The hard-shape
@@ -777,127 +825,163 @@ const PRESETS = {
   },
 };
 
+// Restructured (2026-07-31, later addition) per the designer's ask: to try
+// out CROSS-set combinations, a build now picks up to TWO tier-piece slots
+// independently. Picking the SAME set in both slots reconstructs the old
+// "full set" behaviour (2pc AND 4pc together); picking two DIFFERENT sets
+// gives each set's 2pc-only bonus and neither's 4pc. Each entry below is
+// split into a "twoPc" bundle (always applied when the set is chosen in
+// EITHER slot) and a "fourPc" bundle (applied ADDITIONALLY, only when the
+// same set fills both slots) -- see buildLoadout()'s merge().
 const SETS = {
-  // 2pc rebinds green to lifesteal (same mechanic as Bleeder's blue,
-  // overheal capped into a shield at half max HP) on whichever class you
-  // picked -- and lifesteal now ALSO grants shield equal to what it heals,
-  // not just as overflow past full hp. 4pc: every green gem that pays out
-  // (base match, blast-caught, or fusion-combo-caught) breeds one locust;
-  // locusts bite a random living enemy for 1 each at end of turn, then
-  // reset to zero.
   pharaoh: {
     name: "Pharaoh's Curse",
-    blurb: "2pc: green heals into a shield -- lifesteal now ALSO grants shield equal to what it heals, not just as overflow past full hp. 4pc: every green gem matched also breeds a locust that bites something at turn's end.",
-    colorOverrides: { G: "lifesteal" },
-    locustColor: "G",
-    lifestealGrantsShield: true,
+    twoPcBlurb: "green heals into a shield -- lifesteal now ALSO grants shield equal to what it heals, not just as overflow past full hp",
+    fourPcBlurb: "every green gem matched also breeds a locust that bites something at turn's end",
+    twoPc: { colorOverrides: { G: "lifesteal" }, lifestealGrantsShield: true },
+    fourPc: { locustColor: "G" },
   },
-  // Colour-independent, no colour rebind at all. Fires automatically after
-  // every swipe resolves, regardless of what colour was matched or what
-  // class you're running. 2pc: +1 damage per match beyond the first in
-  // that swipe's full cascade. 4pc: the strike repeats once more per
-  // CUSTODIAN_GEMS_PER_STRIKE gems matched beyond the first match.
   custodian: {
     name: "Cascading Custodian",
-    blurb: "2pc: every swipe autonomously strikes for +1 per match beyond the first, no input needed. 4pc: that strike repeats once more per " + CUSTODIAN_GEMS_PER_STRIKE + " gems matched beyond the first match.",
-    cascadeBonus: true,
+    twoPcBlurb: "every swipe autonomously strikes for +1 per match beyond the first, no input needed",
+    fourPcBlurb: "that strike repeats once more per " + CUSTODIAN_GEMS_PER_STRIKE + " gems matched beyond the first match",
+    twoPc: { cascadeBonus: true },
+    fourPc: { cascadeBonus4pc: true },
   },
-  // Strips whatever the class had bound to blue (colorOverrides.B = null)
-  // and replaces it with pure wild-charge building -- blue has NO direct
-  // effect at all under this set, deliberately. Pays off as a free random
-  // spell at end_turn once the threshold is crossed (MTG storm / Yogg-Saron
-  // flavour). A chaos-fired heal can misfire onto a random living enemy
-  // instead of the player -- a deliberate player cast never does. 4pc:
-  // every ARCHMAGE_DOUBLE_EVERY_NTH_CAST'th lifetime wild-charge cast
-  // deals double; more than that many casts in one turn each risk a small
-  // chance to implode for ARCHMAGE_IMPLODE_DAMAGE to everything.
   archmage: {
     name: "Archmage of Chaos",
-    blurb: "Blue does nothing on its own -- it builds wild charge. At 5 charges (4pc; 2pc alone would need 10), a free random spell fires automatically at end of turn, benefiting from any banked spell buffs same as a manual cast. No mana cost, no aim -- a chaos-fired heal can land on an enemy instead of you. 4pc: every " + ARCHMAGE_DOUBLE_EVERY_NTH_CAST + "th wild-charge cast (lifetime) deals double; more than " + ARCHMAGE_DOUBLE_EVERY_NTH_CAST + " casts in one turn each risk a small chance to implode for " + ARCHMAGE_IMPLODE_DAMAGE + " to everything.",
-    colorOverrides: { B: null },
-    spells: ["heal", "fire", "thunder"],
-    wildChargeColor: "B",
-    wildChargeThreshold: 5,
-    archmageOverload: true,
+    twoPcBlurb: "blue does nothing on its own -- it builds wild charge. At 10 charges, a free random spell fires automatically at end of turn, benefiting from any banked spell buffs same as a manual cast. No mana cost, no aim -- a chaos-fired heal can land on an enemy instead of you",
+    fourPcBlurb: "the wild-charge threshold drops to 5; every " + ARCHMAGE_DOUBLE_EVERY_NTH_CAST + "th wild-charge cast (lifetime) deals double; more than " + ARCHMAGE_DOUBLE_EVERY_NTH_CAST + " casts in one turn each risk a small chance to implode for " + ARCHMAGE_IMPLODE_DAMAGE + " to everything",
+    twoPc: { colorOverrides: { B: null }, spells: ["heal", "fire", "thunder"], wildChargeColor: "B", wildChargeThreshold: 10 },
+    fourPc: { wildChargeThreshold: 5, archmageOverload: true },
   },
   bloodgod: {
     name: "Blood for the Bloodgod",
-    blurb: "2pc: bleed stacks granted are doubled (" + BLOODGOD_BLEED_MULT + "x). 4pc: bleed damage dealt also grants that much mana (" + BLOODGOD_MANA_PER_BLEED_DMG + " mana per point of bleed damage).",
-    bleedMult: BLOODGOD_BLEED_MULT,
-    bleedGrantsMana: true,
+    twoPcBlurb: "bleed stacks granted are doubled (" + BLOODGOD_BLEED_MULT + "x)",
+    fourPcBlurb: "bleed damage dealt also grants that much mana (" + BLOODGOD_MANA_PER_BLEED_DMG + " mana per point of bleed damage)",
+    twoPc: { bleedMult: BLOODGOD_BLEED_MULT },
+    fourPc: { bleedGrantsMana: true },
   },
   razorsEnd: {
     name: "Razor's End",
-    blurb: "2pc: a would-be-lethal hit leaves you at 1 hp instead -- once per encounter. 4pc: deal more damage the more of your own health is missing, up to " + Math.round(RAZORS_END_DEATH_MULT_CAP * 100) + "% at empty health.",
-    razorsEnd: true,
+    twoPcBlurb: "a would-be-lethal hit leaves you at 1 hp instead -- once per encounter",
+    fourPcBlurb: "deal more damage the more of your own health is missing, up to " + Math.round(RAZORS_END_DEATH_MULT_CAP * 100) + "% at empty health",
+    twoPc: { razorsEnd2pc: true },
+    fourPc: { razorsEnd4pc: true },
   },
   tactician: {
     name: "Tactician's Regalia",
-    blurb: "2pc: a swipe that doesn't cascade turns a random gem into a 4chain special, up to " + TACTICIAN_2PC_MAX_PER_TURN + "x a turn. 4pc: a swipe that doesn't cascade also grants another swipe this turn, up to " + TACTICIAN_4PC_MAX_PER_TURN + "x a turn.",
-    tacticianRegalia: true,
+    twoPcBlurb: "a swipe that doesn't cascade turns a random gem into a 4chain special, up to " + TACTICIAN_2PC_MAX_PER_TURN + "x a turn",
+    fourPcBlurb: "a swipe that doesn't cascade also grants another swipe this turn, up to " + TACTICIAN_4PC_MAX_PER_TURN + "x a turn",
+    twoPc: { tactician2pc: true },
+    fourPc: { tactician4pc: true },
   },
   rose: {
     name: "Rose Thorns",
-    blurb: Math.round(ROSE_THORNS_REFLECT_FRAC * 100) + "% of damage you take is dealt back to whatever hit you. 4pc: that reflected damage also applies bleed.",
-    roseThorns: true,
-    roseThornsBleed: true,
+    twoPcBlurb: Math.round(ROSE_THORNS_REFLECT_FRAC * 100) + "% of damage you take is dealt back to whatever hit you",
+    fourPcBlurb: "that reflected damage also applies bleed",
+    twoPc: { roseThorns: true },
+    fourPc: { roseThornsBleed: true },
   },
   voidsGift: {
     name: "Void's Gift",
-    blurb: "2pc: every 3 blue gems matched spawns a void gem -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too. 4pc: matched void gems spawn more, and chip everything on the board for 1 more.",
-    voidGift: true,
+    twoPcBlurb: "every 3 blue gems matched spawns a void gem -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too",
+    fourPcBlurb: "matched void gems spawn more, and chip everything on the board for 1 more",
+    twoPc: { voidGift2pc: true },
+    fourPc: { voidGift4pc: true },
   },
   ace: {
     name: "Ace of Clubs",
-    blurb: "2pc: a defeated enemy explodes for " + Math.round(ACE_OF_CLUBS_EXPLODE_FRAC * 100) + "% of its own max hp to every other enemy. 4pc: if that explosion kills another enemy, they explode too.",
-    aceOfClubs: true,
+    twoPcBlurb: "a defeated enemy explodes for " + Math.round(ACE_OF_CLUBS_EXPLODE_FRAC * 100) + "% of its own max hp to every other enemy",
+    fourPcBlurb: "if that explosion kills another enemy, they explode too",
+    twoPc: { aceOfClubs2pc: true },
+    fourPc: { aceOfClubs4pc: true },
   },
   apocetharys: {
     name: "Apocetharys Garb",
-    blurb: "2pc: 4chain also plants a dormant poison gem on the board -- swipe it into another chain gem, or catch it in a cascading explosion, to detonate it for " + Math.round(POISON_PCT_MAX_HP * 100) + "% of your target's max hp. 4pc: 5chain plants one too, and any poison gem's detonation instead hits every living enemy at once for the same amount.",
-    apocetharys2pc: true,
-    apocetharys4pc: true,
+    twoPcBlurb: "4chain also plants a dormant poison gem on the board -- swipe it into another chain gem, or catch it in a cascading explosion, to detonate it for " + Math.round(POISON_PCT_MAX_HP * 100) + "% of your target's max hp",
+    fourPcBlurb: "5chain plants one too, and any poison gem's detonation instead hits every living enemy at once for the same amount",
+    twoPc: { apocetharys2pc: true },
+    fourPc: { apocetharys4pc: true },
   },
 };
 
-// Plain boolean passthrough flags -- every set that's just an on/off switch
-// (no colour override, no extra data) goes through here instead of a
-// hand-written copy per flag.
-const SET_FLAG_PASSTHROUGH = [
-  "cascadeBonus", "lifestealGrantsShield", "razorsEnd", "roseThorns",
-  "roseThornsBleed", "voidGift", "archmageOverload", "tacticianRegalia",
-  "aceOfClubs", "bleedGrantsMana", "apocetharys2pc", "apocetharys4pc",
+// Every boolean on/off flag a twoPc/fourPc bundle might set -- passed
+// through generically in buildLoadout() instead of a hand-written
+// if-block per flag.
+const SET_FLAG_KEYS = [
+  "cascadeBonus", "cascadeBonus4pc", "lifestealGrantsShield",
+  "razorsEnd2pc", "razorsEnd4pc", "roseThorns", "roseThornsBleed",
+  "voidGift2pc", "voidGift4pc", "archmageOverload",
+  "tactician2pc", "tactician4pc", "aceOfClubs2pc", "aceOfClubs4pc",
+  "bleedGrantsMana", "apocetharys2pc", "apocetharys4pc",
 ];
+
+// None, a single key (string), or a [key1, key2] pair (either slot
+// optionally null/undefined) -- always returns exactly a [key1, key2] pair.
+function normalizeSetKeys(setKeys) {
+  if (!setKeys) return [null, null];
+  if (typeof setKeys === "string") return [setKeys, null];
+  return [setKeys[0] || null, setKeys[1] || null];
+}
 
 // picks = { R, G, Y, B: <gem name>, line4: <gem name>, hardL: <trigger>,
 //           hardT: <trigger>, line5: <trigger>, ultimate: <trigger> }
-function buildLoadout(picks, setKey) {
-  const set = setKey ? SETS[setKey] : null;
+// setKeys picks up to TWO tier-piece slots independently (see the SETS
+// comment above): the same key in both slots grants that set's 2pc AND
+// 4pc together (the old "full set" behaviour); two different keys each
+// grant only their own 2pc bonus, so cross-set combinations can be tried
+// out directly.
+function buildLoadout(picks, setKeys) {
+  const [key1, key2] = normalizeSetKeys(setKeys);
+  const matched = !!key1 && key1 === key2;
+
   const colors = {};
   for (const col of COLORS) colors[col] = picks[col];
-  if (set && set.colorOverrides) {
-    for (const col of Object.keys(set.colorOverrides)) {
-      const eff = set.colorOverrides[col];
-      if (eff === null) delete colors[col]; else colors[col] = eff;
-    }
-  }
   const shapes = { line4: picks.line4, L: picks.hardL, T: picks.hardT };
   if (picks.line5) shapes.line5 = picks.line5;
   if (picks.ultimate) shapes.ultimate = picks.ultimate;
-  const loadout = {
-    name: set ? `Custom build — ${set.name}` : "Custom build",
-    blurb: set ? set.blurb : "Crafted from your own recipe book, one gem per socket.",
-    hp: BASE_HP,
-    spellCost: 1,
-    colors,
-    shapes,
-    spells: set ? set.spells : undefined,
-    locustColor: set ? set.locustColor : undefined,
-    wildChargeColor: set ? set.wildChargeColor : undefined,
-    wildChargeThreshold: set ? set.wildChargeThreshold : undefined,
-    bleedMult: set && set.bleedMult ? set.bleedMult : 1,
+  const loadout = { hp: BASE_HP, spellCost: 1, colors, shapes };
+
+  const merge = bundle => {
+    if (bundle.colorOverrides) {
+      for (const col of Object.keys(bundle.colorOverrides)) {
+        const eff = bundle.colorOverrides[col];
+        if (eff === null) delete colors[col]; else colors[col] = eff;
+      }
+    }
+    if (bundle.spells) loadout.spells = bundle.spells;
+    if (bundle.locustColor) loadout.locustColor = bundle.locustColor;
+    if (bundle.wildChargeColor) loadout.wildChargeColor = bundle.wildChargeColor;
+    if (bundle.wildChargeThreshold) loadout.wildChargeThreshold = bundle.wildChargeThreshold;
+    if (bundle.bleedMult) loadout.bleedMult = bundle.bleedMult;
+    for (const flag of SET_FLAG_KEYS) if (bundle[flag]) loadout[flag] = true;
   };
-  if (set) for (const flag of SET_FLAG_PASSTHROUGH) if (set[flag]) loadout[flag] = true;
+
+  const names = [], blurbs = [];
+  if (matched) {
+    const s = SETS[key1];
+    merge(s.twoPc);
+    merge(s.fourPc);
+    names.push(s.name);
+    blurbs.push(`2pc: ${s.twoPcBlurb}. 4pc: ${s.fourPcBlurb}.`);
+  } else {
+    for (const k of [key1, key2]) {
+      if (!k) continue;
+      const s = SETS[k];
+      merge(s.twoPc);
+      names.push(`${s.name} (2pc)`);
+      blurbs.push(`${s.name} 2pc: ${s.twoPcBlurb}.`);
+    }
+  }
+
+  if (names.length) {
+    loadout.name = "Custom build — " + names.join(" + ");
+    loadout.blurb = blurbs.join("  ||  ");
+  } else {
+    loadout.name = "Custom build";
+    loadout.blurb = "Crafted from your own recipe book, one gem per socket.";
+  }
   return loadout;
 }
 
@@ -1144,7 +1228,7 @@ function applyEffect(effect, value, tag) {
   // Razor's End 4pc: the more of your OWN health is missing, the harder
   // every damage-dealing effect hits -- scales up to RAZORS_END_DEATH_MULT_CAP
   // (250%) at empty health. Only effects that hit an enemy scale.
-  if ((effect === "attack" || effect === "bleed" || effect === "splash") && loadout.razorsEnd) {
+  if ((effect === "attack" || effect === "bleed" || effect === "splash" || effect === "execute") && loadout.razorsEnd4pc) {
     const missingFrac = player.maxHp ? Math.max(0, Math.min(1, (player.maxHp - player.hp) / player.maxHp)) : 0;
     const mult = 1 + (RAZORS_END_DEATH_MULT_CAP - 1) * missingFrac;
     value = Math.floor(value * mult);
@@ -1153,8 +1237,15 @@ function applyEffect(effect, value, tag) {
   // attack/bleed are red-exclusive and splash is yellow-exclusive by
   // construction (see GEM_POOLS), so keying off effect name is equivalent
   // to keying off colour here.
-  if ((effect === "attack" || effect === "bleed" || effect === "splash") && player.phantomBladeTurns > 0) {
+  if ((effect === "attack" || effect === "bleed" || effect === "splash" || effect === "execute") && player.phantomBladeTurns > 0) {
     value *= 2;
+  }
+  // Yellow "sharpen": every banked stack applies at once as a flat percent
+  // bonus to the next damage-dealing hit, then resets to zero -- a
+  // build-up-then-release payoff, not a slow trickle.
+  if ((effect === "attack" || effect === "bleed" || effect === "splash" || effect === "execute") && player.sharpenStacks) {
+    value = Math.floor(value * (1 + player.sharpenStacks * SHARPEN_PCT_PER_STACK));
+    player.sharpenStacks = 0;
   }
   const t = currentTarget();
   if (effect === "attack") {
@@ -1176,12 +1267,14 @@ function applyEffect(effect, value, tag) {
     player.armour += amt; log(`${tag}: +${amt} armour`, "good");
   } else if (effect === "lifesteal") {
     // Overflow rather than waste: healing past full becomes a shield (capped
-    // at half max HP). Before this, a healthy Bleeder's blue was a dead
-    // colour -- whole runs of "+0 health".
+    // at half max HP) -- but at a WORSE rate than a dedicated Block pick
+    // (LIFESTEAL_SHIELD_RATE), so a topped-off lifesteal build isn't simply
+    // strictly better than block. Before this shield existed at all, a
+    // healthy Bleeder's blue was a dead colour -- whole runs of "+0 health".
     const amt = Math.max(1, Math.floor(value / 2));
     const healed = Math.min(amt, player.maxHp - player.hp);
     player.hp += healed;
-    const over = amt - healed;
+    const over = Math.floor((amt - healed) * LIFESTEAL_SHIELD_RATE);
     const cap = Math.floor(player.maxHp / 2);
     let gained = 0;
     if (over > 0) {
@@ -1209,6 +1302,34 @@ function applyEffect(effect, value, tag) {
       others.forEach(e => e.hp -= each);
       log(`${tag}: ${each} splash to ${others.length} other(s)`, "hit");
     } else if (t) { t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit"); }
+  } else if (effect === "sharpen") {
+    // Banks a stack rather than paying out anything itself -- see the
+    // sharpen consumption check at the top of this function.
+    if (player.sharpenStacks < SHARPEN_MAX_STACKS) {
+      player.sharpenStacks++;
+      const pct = Math.round(SHARPEN_PCT_PER_STACK * 100);
+      log(`${tag}: sharpen stack (${player.sharpenStacks}/${SHARPEN_MAX_STACKS}) — next hit +${player.sharpenStacks * pct}%`, "good");
+    } else {
+      log(`${tag}: sharpen already at max (${SHARPEN_MAX_STACKS})`, "good");
+    }
+  } else if (effect === "execute") {
+    if (t) {
+      const missingFrac = t.maxHp ? Math.max(0, Math.min(1, (t.maxHp - t.hp) / t.maxHp)) : 0;
+      const mult = 1 + (EXECUTE_BONUS_MULT_CAP - 1) * missingFrac;
+      const dealt = Math.floor(value * mult);
+      t.hp -= dealt;
+      log(`${tag}: execute hits ${t.name} for ${dealt}`, "hit");
+    }
+  } else if (effect === "focus") {
+    // Banks a stack rather than paying out anything itself -- see the
+    // focus discount applied in cast().
+    if (player.focusStacks < FOCUS_MAX_STACKS) {
+      player.focusStacks++;
+      const pct = Math.round(FOCUS_PCT_PER_STACK * 100);
+      log(`${tag}: focus stack (${player.focusStacks}/${FOCUS_MAX_STACKS}) — next cast -${player.focusStacks * pct}% cost`, "good");
+    } else {
+      log(`${tag}: focus already at max (${FOCUS_MAX_STACKS})`, "good");
+    }
   }
 }
 
@@ -1247,7 +1368,7 @@ function applySeededGem(color, gemCount, tag) {
     const selfhit = Math.max(1, Math.floor(value * VOID_SELFHIT_FRAC));
     player.hp -= selfhit;
     log(`${tag}: void gem hits ${t.name} for ${value} (and you for ${selfhit})`, "hit");
-    if (loadout.voidGift) {
+    if (loadout.voidGift4pc) {
       // 4pc: matched void gems spawn more, and void cascades chip
       // everything on the board (living enemies) for a flat 1.
       const placed = seedGems("X", 1);
@@ -1298,7 +1419,7 @@ function firePoisonGem() {
    centralised on-death hook (damage is dealt from many call sites) --
    checked at the main resolution checkpoints instead. */
 function checkAceOfClubs() {
-  if (!loadout.aceOfClubs) return;
+  if (!loadout.aceOfClubs2pc) return;
   let newlyDead = enemies.filter(e => e.hp <= 0 && !e.exploded);
   let guard = 0;
   while (newlyDead.length && guard++ < 20) {
@@ -1309,7 +1430,10 @@ function checkAceOfClubs() {
     const dmg = Math.max(1, Math.floor(e.maxHp * ACE_OF_CLUBS_EXPLODE_FRAC));
     others.forEach(o => o.hp -= dmg);
     log(`** ${e.name} explodes for ${dmg} to ${others.length} other enem${others.length === 1 ? "y" : "ies"}`, "spec");
-    newlyDead = newlyDead.concat(others.filter(o => o.hp <= 0 && !o.exploded));
+    // 4pc: the chain only continues to whoever THAT explosion also killed
+    // -- without it, 2pc alone still does its own single round of
+    // explosions, it just never cascades into a second wave.
+    if (loadout.aceOfClubs4pc) newlyDead = newlyDead.concat(others.filter(o => o.hp <= 0 && !o.exploded));
   }
 }
 
@@ -1832,7 +1956,7 @@ async function resolveBoard() {
 
         // Void's Gift 2pc: every 3 blue gems matched spawns a void gem --
         // independent of whatever blue is actually bound to.
-        if (color === "B" && loadout.voidGift) {
+        if (color === "B" && loadout.voidGift2pc) {
           const n = Math.floor(cells.length / 3);
           if (n) {
             const placed = seedGems("X", n);
@@ -1922,8 +2046,11 @@ function fireCascadeBonus(totalMatches, totalGems, firstMatchGems) {
   const matchesBeyondFirst = Math.max(0, totalMatches - 1);
   if (!matchesBeyondFirst) return;
   const perStrike = matchesBeyondFirst * CUSTODIAN_DMG_PER_MATCH;
-  const gemsBeyondFirst = Math.max(0, totalGems - firstMatchGems);
-  const hits = 1 + Math.floor(gemsBeyondFirst / CUSTODIAN_GEMS_PER_STRIKE);
+  let hits = 1;
+  if (loadout.cascadeBonus4pc) {
+    const gemsBeyondFirst = Math.max(0, totalGems - firstMatchGems);
+    hits += Math.floor(gemsBeyondFirst / CUSTODIAN_GEMS_PER_STRIKE);
+  }
 
   let dealt = 0, landed = 0;
   for (let i = 0; i < hits; i++) {
@@ -2019,10 +2146,18 @@ function cast(name) {
   if (busy) return;
   if (!availableSpells().includes(name)) return;
   const free = player.nextSpellFree;
-  const cost = free ? 0 : spellCost(name);
+  let cost = free ? 0 : spellCost(name);
+  if (!free && player.focusStacks) {
+    // Blue/Yellow "focus": banked stacks discount THIS cast's cost --
+    // applied to the afford-check too, but only actually SPENT once the
+    // cast clears it (an unaffordable cast must not burn the banked
+    // stacks for nothing).
+    cost = Math.max(1, Math.floor(cost * (1 - player.focusStacks * FOCUS_PCT_PER_STACK)));
+  }
   if (player.mana < cost) return;
   player.mana -= cost;
   if (free) player.nextSpellFree = false;
+  else if (player.focusStacks) player.focusStacks = 0;
   stats.spells[name] = (stats.spells[name] || 0) + 1;
   const factor = consumeSpellBuffs();
   const result = resolveSpellEffect(name, factor, false);
@@ -2138,7 +2273,7 @@ async function endTurn() {
         continue;
       }
 
-      if (taken >= player.hp && loadout.razorsEnd && !player.cheatedDeath) {
+      if (taken >= player.hp && loadout.razorsEnd2pc && !player.cheatedDeath) {
         // Razor's End 2pc: a would-be-lethal hit leaves you at 1 instead --
         // once per encounter, not every time.
         player.cheatedDeath = true;
@@ -2499,10 +2634,12 @@ async function attemptSwap(r1, c1, r2, c2) {
     if (doubled) log("(swipe was DOUBLED)", "good");
     if (repeat > 1) log(`(triggers fired x${repeat})`, "good");
 
-    if (chain === 1 && loadout.tacticianRegalia) {
+    if (chain === 1) {
       // Tactician's Regalia: a swipe that didn't cascade at all is
-      // rewarded instead of wasted -- capped per turn on each half.
-      if (player.tactician2pcUsedThisTurn < TACTICIAN_2PC_MAX_PER_TURN) {
+      // rewarded instead of wasted -- capped per turn on each half. 2pc
+      // and 4pc are independent flags now, so either can be active on its
+      // own (mixed with a different set's 2pc).
+      if (loadout.tactician2pc && player.tactician2pcUsedThisTurn < TACTICIAN_2PC_MAX_PER_TURN) {
         player.tactician2pcUsedThisTurn++;
         const rr = rnd(SIZE), rc = rnd(SIZE);
         if (!special[rr][rc]) {
@@ -2510,7 +2647,7 @@ async function attemptSwap(r1, c1, r2, c2) {
           log("Tactician's Regalia: no cascade -- a random gem becomes a 4chain", "spec");
         }
       }
-      if (player.tactician4pcUsedThisTurn < TACTICIAN_4PC_MAX_PER_TURN) {
+      if (loadout.tactician4pc && player.tactician4pcUsedThisTurn < TACTICIAN_4PC_MAX_PER_TURN) {
         player.tactician4pcUsedThisTurn++;
         swipes++;
         log("Tactician's Regalia: no cascade -- +1 swipe", "spec");
@@ -2775,10 +2912,18 @@ function render(fresh) {
   if (player.dmgNegateNextTurn) buffs.push("NEXT TURN'S DAMAGE NEGATED");
   if (player.deathmarkActive) buffs.push("DEATHMARK ACTIVE -- CLEAR THE FIELD OR DIE");
   if (player.gambleNextLine3) buffs.push("NEXT 3-MATCH IS A GAMBLE");
+  if (player.sharpenStacks) buffs.push(`SHARPEN ${player.sharpenStacks}/${SHARPEN_MAX_STACKS} (+${player.sharpenStacks * Math.round(SHARPEN_PCT_PER_STACK * 100)}% next hit)`);
   q("buffs").innerHTML = buffs.map(b => `<div class="buff">${b}</div>`).join("");
 
   q("spells").innerHTML = availableSpells().map(n => {
-    const cost = spellCost(n);
+    // Show what THIS cast would actually charge -- free (banked
+    // next_spell_free) or focus-discounted -- so a button never renders
+    // "disabled" for a cost cast() wouldn't actually ask for.
+    const free = player.nextSpellFree;
+    let cost = free ? 0 : spellCost(n);
+    if (!free && player.focusStacks) {
+      cost = Math.max(1, Math.floor(cost * (1 - player.focusStacks * FOCUS_PCT_PER_STACK)));
+    }
     const off = player.mana < cost ? "disabled" : "";
     return `<button ${off} data-spell="${n}">${SPELLS[n].label}<small>${cost} mana</small><small>${SPELLS[n].note}</small></button>`;
   }).join("");
@@ -2847,6 +2992,8 @@ function startEncounter() {
   player.tactician2pcUsedThisTurn = 0;
   player.tactician4pcUsedThisTurn = 0;
   player.gambleNextLine3 = false;
+  player.sharpenStacks = 0;
+  player.focusStacks = 0;
   // wildChargeCastCount is NOT reset here -- Archmage 4pc's "every Nth cast"
   // is a LIFETIME count, not per-encounter.
   // Confirmed by the designer (2026-07-30): these reset per encounter, not
@@ -2861,8 +3008,8 @@ function startEncounter() {
   render(true);
 }
 
-function begin(picksArg, setKey) {
-  loadout = buildLoadout(picksArg, setKey);
+function begin(picksArg, setKeys) {
+  loadout = buildLoadout(picksArg, setKeys);
   player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
              shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0,
              doubleNextSwipe: false, nextSpellFree: false, dodgeStacks: 0, dodgeCharges: 0,
@@ -2874,7 +3021,9 @@ function begin(picksArg, setKey) {
              dmgNegateNextTurn: false,     // Power "damage negate + reflect"
              deathmarkActive: false,       // Ultimate "deathmark"
              tactician2pcUsedThisTurn: 0, tactician4pcUsedThisTurn: 0,
-             gambleNextLine3: false };     // spell "Gambler's Gambit"
+             gambleNextLine3: false,       // spell "Gambler's Gambit"
+             sharpenStacks: 0,             // Yellow "sharpen" -- banked, consumed whole by the next attack/bleed/splash
+             focusStacks: 0 };             // Blue/Yellow "focus" -- banked, consumed whole by the next manual spell cast
   encounter = 0;
   document.getElementById("setup").classList.add("hidden");
   document.getElementById("game").classList.remove("hidden");
@@ -2895,7 +3044,11 @@ function begin(picksArg, setKey) {
 
 const COLOUR_NAME = { R: "Red", G: "Green", Y: "Yellow", B: "Blue" };
 let picks = { R: null, G: null, Y: null, B: null, line4: null, hardL: null, hardT: null, line5: null, ultimate: null };
-let pickedSet = null;
+// Two independent tier-piece slots: click a card once for its 2pc bonus,
+// click the SAME card again to escalate to the full 2pc+4pc (the old
+// "one set" behaviour), click a third time to clear it. Two DIFFERENT
+// cards mix each one's 2pc-only bonus.
+let pickedSet1 = null, pickedSet2 = null;
 
 function allSocketsFilled() {
   return COLORS.every(c => picks[c]) && picks.line4 && picks.hardL && picks.hardT;
@@ -2908,8 +3061,9 @@ function gemCardHtml(slot, gem, title, desc) {
 
 function setCardHtml(k, s) {
   return `<div class="card" data-k="${k}">
-    <h3>${s.name}</h3>
-    <p>${s.blurb}</p>
+    <h3>${s.name} <span class="tier-badge"></span></h3>
+    <p><b>2pc:</b> ${s.twoPcBlurb}.</p>
+    <p><b>4pc:</b> ${s.fourPcBlurb}.</p>
   </div>`;
 }
 
@@ -2923,7 +3077,7 @@ function presetCardHtml(k, p) {
 function renderSetupPreview() {
   const el = document.getElementById("setupPreview");
   if (!allSocketsFilled()) { el.textContent = ""; return; }
-  const l = buildLoadout(picks, pickedSet);
+  const l = buildLoadout(picks, [pickedSet1, pickedSet2]);
   const colourChips = COLORS.map(c => {
     const eff = effectLabel(l, c) || "inert";
     return `<span class="chip"><b style="color:var(--${c})">${EFFECT_ICON[eff] || ""}</b> ${eff.replace(/_/g, " ")}</span>`;
@@ -2954,8 +3108,14 @@ function refreshSetupSelection() {
     c.classList.toggle("selected", picks.line5 === c.dataset.gem));
   document.querySelectorAll("#gemUltimate .card").forEach(c =>
     c.classList.toggle("selected", picks.ultimate === c.dataset.gem));
-  document.querySelectorAll("#setCards .card").forEach(c =>
-    c.classList.toggle("selected", c.dataset.k === pickedSet));
+  document.querySelectorAll("#setCards .card").forEach(c => {
+    const k = c.dataset.k;
+    const inSlot1 = pickedSet1 === k, inSlot2 = pickedSet2 === k;
+    c.classList.toggle("selected", inSlot1 || inSlot2);
+    c.classList.toggle("matched", inSlot1 && inSlot2);
+    const badge = c.querySelector(".tier-badge");
+    if (badge) badge.textContent = (inSlot1 && inSlot2) ? "(2pc + 4pc)" : (inSlot1 || inSlot2) ? "(2pc)" : "";
+  });
 
   const filled = allSocketsFilled();
   const btn = document.getElementById("beginBtn");
@@ -3020,7 +3180,21 @@ document.querySelectorAll("#gemUltimate .card").forEach(c => c.onclick = () => {
   refreshSetupSelection();
 });
 document.querySelectorAll("#setCards .card").forEach(c => c.onclick = () => {
-  pickedSet = pickedSet === c.dataset.k ? null : c.dataset.k; // click again to deselect
+  const k = c.dataset.k;
+  if (pickedSet1 === k && pickedSet2 === k) {
+    // fully selected (2pc + 4pc) -- clear both
+    pickedSet1 = null; pickedSet2 = null;
+  } else if (pickedSet1 === k && pickedSet2 === null) {
+    // already 2pc-only -- escalate to the full set (4pc too)
+    pickedSet2 = k;
+  } else if (pickedSet1 === null) {
+    pickedSet1 = k;
+  } else if (pickedSet2 === null) {
+    pickedSet2 = k;
+  } else {
+    // both slots already hold two OTHER sets -- start over with this pick
+    pickedSet1 = k; pickedSet2 = null;
+  }
   refreshSetupSelection();
 });
 document.querySelectorAll("#presetCards .card").forEach(c => c.onclick = () => {
@@ -3031,7 +3205,7 @@ document.getElementById("advancedToggle").onchange = e => {
   document.getElementById("advancedSection").classList.toggle("hidden", !e.target.checked);
 };
 document.getElementById("beginBtn").onclick = () => {
-  if (allSocketsFilled()) begin(picks, pickedSet);
+  if (allSocketsFilled()) begin(picks, [pickedSet1, pickedSet2]);
 };
 </script>
 </body>
