@@ -650,8 +650,8 @@ const TRIGGER_DESC = {
   stun: "target loses its next action; spills onto an unstunned enemy",
   bleed_burst: "a lump of extra bleed stacks",
   bleed_detonate: "consumes the biggest bleed on the field for 3x as instant damage",
-  spell_buff: `your next spell hits ${Math.round(LINE4_SPELL_BUFF * 100)}% harder `
-    + `(stacks up to ${SPELL_BUFF_MAX_STACKS}, banked until spent)`,
+  spell_buff: `banks a stack (up to ${SPELL_BUFF_MAX_STACKS}); your next cast consumes them `
+    + `all at once, +${Math.round(LINE4_SPELL_BUFF * 100)}% per stack`,
   double_next_spell: "your next spell fires twice",
   color_boost: `adds a flat +${COLOR_BOOST_FLAT} to this chain's own colour effect`,
   all_color_boost: `adds a flat +${ALL_COLOR_BOOST_FLAT} to EVERY colour effect you have bound`,
@@ -2138,7 +2138,13 @@ function resolveSpellEffect(name, factor, chaotic) {
 function consumeSpellBuffs() {
   let factor = 1;
   if (player.doubleNext) { factor *= 2; player.doubleNext = false; }
-  if (player.spellBuffStacks) { factor *= 1 + LINE4_SPELL_BUFF; player.spellBuffStacks--; }
+  if (player.spellBuffStacks) {
+    // ALL banked stacks spend on this one cast at once (a
+    // build-up-then-release payoff, same pattern as sharpen/focus), not
+    // one stack per cast.
+    factor *= 1 + player.spellBuffStacks * LINE4_SPELL_BUFF;
+    player.spellBuffStacks = 0;
+  }
   return factor;
 }
 
