@@ -131,6 +131,19 @@
     font-size: 11px; color: var(--dim);
   }
   .gembox.inert .top { color: var(--dim); }
+  /* Running total of this colour's own effect THIS TURN ONLY (reset on End
+     Turn) -- a tester found the log good for reading back later but hard
+     to use for "what did I just do", so this counts up live above the
+     legend instead. */
+  .turn-total {
+    font-size: 19px; font-weight: 800; line-height: 1; text-align: center;
+    margin-bottom: 4px; font-variant-numeric: tabular-nums;
+  }
+  .turn-total.bump { animation: turnTotalBump .3s ease-out; }
+  @keyframes turnTotalBump {
+    0% { transform: scale(1.4); }
+    100% { transform: scale(1); }
+  }
 
   /* Combos: same box, but its tooltip is the whole point */
   .combobox {
@@ -324,6 +337,11 @@
       what your gear lets a match do. Quick rundown below, or just dive in.
     </p>
 
+    <p class="hint" style="margin:0 0 16px">
+      Also trying the <b>open-world prototype</b>? It wraps this same combat in a
+      map to explore between fights &mdash; <a href="overworld.html">play it here</a>.
+    </p>
+
     <div class="tutorial">
       <h3 class="section-h" style="margin-top:0">How to play</h3>
       <ol>
@@ -445,7 +463,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-07-31b";
+const GAME_VERSION = "2026-08-01";
 
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
@@ -1224,7 +1242,20 @@ function log(text, cls) {
   el.scrollTop = el.scrollHeight;
 }
 
-function applyEffect(effect, value, tag) {
+// Per-colour running total for the CURRENT turn only -- reset in endTurn()
+// and startEncounter(). Purely a display aid (a tester found the log
+// "mostly helpful for reading back later, not for seeing what just
+// happened") so the numbers above the gem legend can count up live as a
+// swipe/cast resolves. wildChargeColor gets tracked too even though it has
+// no ordinary effect of its own -- Archmage's blue is otherwise completely
+// silent turn to turn.
+const turnTotals = { R: 0, G: 0, Y: 0, B: 0 };
+function addTurnTotal(color, amount) {
+  if (!color || !(color in turnTotals) || !amount) return;
+  turnTotals[color] += amount;
+}
+
+function applyEffect(effect, value, tag, color) {
   // Razor's End 4pc: the more of your OWN health is missing, the harder
   // every damage-dealing effect hits -- scales up to RAZORS_END_DEATH_MULT_CAP
   // (250%) at empty health. Only effects that hit an enemy scale.
@@ -1249,22 +1280,25 @@ function applyEffect(effect, value, tag) {
   }
   const t = currentTarget();
   if (effect === "attack") {
-    if (t) { t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit"); }
+    if (t) { t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit"); addTurnTotal(color, value); }
   } else if (effect === "bleed") {
     if (t) {
       let s = Math.max(1, Math.floor(value / 4));
       s *= (loadout.bleedMult || 1);  // Blood for the Bloodgod 2pc
       t.bleed += s; log(`${tag}: +${s} bleed on ${t.name}`, "hit");
+      addTurnTotal(color, s);
     }
   } else if (effect === "block") {
     // Block buys damage at half rate; at parity a defensive build never gets hit.
     const amt = Math.max(1, Math.floor(value / 2));
     player.block += amt; log(`${tag}: +${amt} block`, "good");
+    addTurnTotal(color, amt);
   } else if (effect === "armour") {
     // Unlike block, armour survives the turn -- a martial build builds a wall
     // across a long fight instead of re-earning it every turn.
     const amt = Math.max(1, Math.floor(value / 3));
     player.armour += amt; log(`${tag}: +${amt} armour`, "good");
+    addTurnTotal(color, amt);
   } else if (effect === "lifesteal") {
     // Overflow rather than waste: healing past full becomes a shield (capped
     // at half max HP) -- but at a WORSE rate than a dedicated Block pick
@@ -1293,15 +1327,21 @@ function applyEffect(effect, value, tag) {
     if (healed && totalShield > 0) log(`${tag}: +${healed} health, +${totalShield} shield`, "good");
     else if (totalShield > 0) log(`${tag}: +${totalShield} shield`, "good");
     else log(`${tag}: +${healed} health`, "good");
+    addTurnTotal(color, healed + totalShield);
   } else if (effect === "mana") {
     player.mana += value; log(`${tag}: +${value} mana`, "good");
+    addTurnTotal(color, value);
   } else if (effect === "splash") {
     const others = living().filter(e => e !== t);
     if (others.length) {
       const each = Math.max(1, Math.floor(value / 2));
       others.forEach(e => e.hp -= each);
       log(`${tag}: ${each} splash to ${others.length} other(s)`, "hit");
-    } else if (t) { t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit"); }
+      addTurnTotal(color, each * others.length);
+    } else if (t) {
+      t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit");
+      addTurnTotal(color, value);
+    }
   } else if (effect === "sharpen") {
     // Banks a stack rather than paying out anything itself -- see the
     // sharpen consumption check at the top of this function.
@@ -1319,6 +1359,7 @@ function applyEffect(effect, value, tag) {
       const dealt = Math.floor(value * mult);
       t.hp -= dealt;
       log(`${tag}: execute hits ${t.name} for ${dealt}`, "hit");
+      addTurnTotal(color, dealt);
     }
   } else if (effect === "focus") {
     // Banks a stack rather than paying out anything itself -- see the
@@ -1543,10 +1584,10 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     log(`>> ${tag} TRIGGER: next spell fires twice`, "spec");
   } else if (trigger === "color_boost") {
     const eff = color ? loadout.colors[color] : null;
-    if (eff) applyEffect(eff, COLOR_BOOST_FLAT, `${tag} chain-colour boost`);
+    if (eff) applyEffect(eff, COLOR_BOOST_FLAT, `${tag} chain-colour boost`, color);
   } else if (trigger === "all_color_boost") {
     for (const col of Object.keys(loadout.colors).sort()) {
-      applyEffect(loadout.colors[col], ALL_COLOR_BOOST_FLAT, `${tag} all-colour boost (${col})`);
+      applyEffect(loadout.colors[col], ALL_COLOR_BOOST_FLAT, `${tag} all-colour boost (${col})`, col);
     }
   } else if (trigger === "double_next_swipe") {
     player.doubleNextSwipe = true;
@@ -1588,7 +1629,7 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     const wtag = `${tag} wildcard x${WILDCARD_POWER_MULT}`;
     if (otherColor) {
       const eff = loadout.colors[otherColor];
-      if (eff) applyEffect(eff, boosted, wtag);
+      if (eff) applyEffect(eff, boosted, wtag, otherColor);
     }
     const otherTrigger = loadout.shapes[baseShape(otherShape)];
     if (otherTrigger) return fireTriggerOnce(otherTrigger, boosted, wtag) || [];
@@ -1712,7 +1753,7 @@ function detonateAll(fuse) {
     const value = Math.floor(SPECIAL_GEMS * PER_GEM * SHAPE_MULT[shape] * valueMult);
     const tag = `${shape} SPECIAL`;
     const effect = loadout.colors[color];
-    if (effect) applyEffect(effect, value, tag);
+    if (effect) applyEffect(effect, value, tag, color);
     const trig = loadout.shapes[baseShape(shape)];
     if (trig) {
       const extra = fireTrigger(trig, value, tag, color) || [];
@@ -1728,9 +1769,9 @@ function detonateAll(fuse) {
       if (board[y][x] === color) caught++;
       if (special[y][x]) { const held = special[y][x]; special[y][x] = null; fuse.push([held, y, x]); }
     }
-    if (effect && caught) applyEffect(effect, Math.floor(caught * PER_GEM * valueMult), `${shape} blast`);
+    if (effect && caught) applyEffect(effect, Math.floor(caught * PER_GEM * valueMult), `${shape} blast`, color);
     if (caught && color === loadout.locustColor) player.locusts += caught;
-    if (caught && color === loadout.wildChargeColor) player.wildCharges += caught;
+    if (caught && color === loadout.wildChargeColor) { player.wildCharges += caught; addTurnTotal(color, caught); }
     log(`** ${shape} SPECIAL detonates -- ${fresh.length} gems destroyed`, "spec");
   }
   return [...blasted].map(k => [Math.floor(k / SIZE), k % SIZE]);
@@ -1800,7 +1841,7 @@ function comboDetonate(shape, colours, cells, opts) {
   const tag = opts.tag === undefined ? `${shape}+${shape} COMBO` : opts.tag;
   for (const col of [...colours].sort()) {
     const eff = loadout.colors[col];
-    if (eff) applyEffect(eff, value, tag);
+    if (eff) applyEffect(eff, value, tag, col);
   }
   // One trigger per half of the fusion, so a mismatched pair fires whatever
   // each of its two shapes is bound to rather than double-firing the winner's.
@@ -1839,9 +1880,9 @@ function comboDetonate(shape, colours, cells, opts) {
   for (const col of Object.keys(caught).sort()) {
     const count = caught[col];
     const eff = loadout.colors[col];
-    if (eff) applyEffect(eff, count * PER_GEM, `${shape} combo blast`);
+    if (eff) applyEffect(eff, count * PER_GEM, `${shape} combo blast`, col);
     if (count && col === loadout.locustColor) player.locusts += count;
-    if (count && col === loadout.wildChargeColor) player.wildCharges += count;
+    if (count && col === loadout.wildChargeColor) { player.wildCharges += count; addTurnTotal(col, count); }
   }
   log(`** COMBO destroys ${cells.length} gems`, "combo");
   return cells.concat(detonateAll(chained)).concat(extraCleared);
@@ -1952,7 +1993,7 @@ async function resolveBoard() {
         // has none at all), so these must not sit behind the effect check
         // below.
         if (color === loadout.locustColor) player.locusts += cells.length;
-        if (color === loadout.wildChargeColor) player.wildCharges += cells.length;
+        if (color === loadout.wildChargeColor) { player.wildCharges += cells.length; addTurnTotal(color, cells.length); }
 
         // Void's Gift 2pc: every 3 blue gems matched spawns a void gem --
         // independent of whatever blue is actually bound to.
@@ -1965,7 +2006,7 @@ async function resolveBoard() {
         }
 
         const effect = loadout.colors[color];
-        if (effect) applyEffect(effect, Math.floor(cells.length * PER_GEM * valueMult), tag);
+        if (effect) applyEffect(effect, Math.floor(cells.length * PER_GEM * valueMult), tag, color);
       }
 
       for (const [r, c] of cells) {
@@ -2345,6 +2386,7 @@ async function endTurn() {
   player.dmgTakenLastTurn = player.dmgTakenThisTurn;
   player.dmgTakenThisTurn = 0;
   swipes = SWIPES_PER_TURN;
+  for (const c of COLORS) turnTotals[c] = 0;  // "this turn" counters above the gem legend
   // spellBuffStacks, doubleNext, nextSpellFree, and banked dodgeCharges all
   // persist until actually spent -- banked buffs for "whenever I next
   // cast/get hit", not same-turn-only.
@@ -2801,6 +2843,7 @@ function renderGemRow() {
     const tip = `${eff.replace(/_/g, " ")} -- ${desc}. `
       + `${rate(3)} / ${rate(4)} / ${rate(5)} for a match of 3 / 4 / 5 gems.`;
     return `<div class="gembox ${c}" title="${tip}">`
+      + `<div class="turn-total" id="turnTotal-${c}" style="color:var(--${c})">0</div>`
       + `<div class="top"><span class="g" style="color:var(--${c})">`
       + `${EFFECT_ICON[eff] || "?"}</span><span>${eff.replace(/_/g, " ")}</span></div>`
       + `<div class="rates">${rate(3)} &middot; ${rate(4)} &middot; ${rate(5)}</div></div>`;
@@ -2809,6 +2852,29 @@ function renderGemRow() {
   const note = `<div class="gemnote">each box: what a match of `
     + `<b>3</b> &middot; <b>4</b> &middot; <b>5</b> gems pays</div>`;
   document.getElementById("gemrow").innerHTML = cells + comboBoxHTML() + note;
+  // renderGemRow() only rebuilds the boxes when the loadout signature
+  // changes (see above), so the counters it just created start stale --
+  // sync them immediately rather than waiting for the next render() tick.
+  updateTurnTotals();
+}
+
+/* Updates the per-colour "this turn" counters in place -- deliberately NOT
+   part of renderGemRow()'s cached rebuild, since these change on every
+   swipe/cast while the boxes themselves don't. A brief scale "bump" on
+   change gives the live-updating number some weight instead of just
+   silently ticking over. */
+function updateTurnTotals() {
+  for (const c of COLORS) {
+    const el = document.getElementById(`turnTotal-${c}`);
+    if (!el) continue;
+    const val = turnTotals[c] || 0;
+    if (el._lastVal === val) continue;
+    el.textContent = val;
+    el.classList.remove("bump");
+    void el.offsetWidth; // restart the CSS animation even if it was mid-play
+    el.classList.add("bump");
+    el._lastVal = val;
+  }
 }
 
 /* The Combos tooltip. Labels are generated by calling the REAL blast
@@ -2954,6 +3020,7 @@ function render(fresh) {
     d.onclick = () => { targetIdx = +d.dataset.i; render(); });
 
   renderGemRow();
+  updateTurnTotals();
   // Colours moved up into the gem row, so this line now carries only the
   // shape triggers -- no duplication.
   q("legend").innerHTML = Object.entries(loadout.shapes).map(([s, t]) =>
@@ -3000,6 +3067,7 @@ function startEncounter() {
   player.gambleNextLine3 = false;
   player.sharpenStacks = 0;
   player.focusStacks = 0;
+  for (const c of COLORS) turnTotals[c] = 0;  // "this turn" counters above the gem legend
   // wildChargeCastCount is NOT reset here -- Archmage 4pc's "every Nth cast"
   // is a LIFETIME count, not per-encounter.
   // Confirmed by the designer (2026-07-30): these reset per encounter, not
