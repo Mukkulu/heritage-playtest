@@ -176,7 +176,54 @@
 
   /* ---------- game layout ---------- */
   .game { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr) 330px; align-items: start; }
-  @media (max-width: 860px) { .game { grid-template-columns: 1fr; } }
+  /* ---------- portrait / narrow ----------
+     On a phone the right-hand column stacked BELOW the board, which put the
+     enemies, their health and their telegraph off-screen. That breaks the
+     core loop: the whole design is "enemies announce what they will do, you
+     spend three swipes preparing for it" -- if you have to scroll to read the
+     telegraph, you are not playing the game the design intends.
+
+     So in portrait the order becomes: enemies -> your status -> board ->
+     spells -> end turn -> log. `display: contents` on .side lets the panels
+     be re-ordered individually without restructuring the desktop grid. */
+  @media (max-width: 860px) {
+    .game { display: flex; flex-direction: column; gap: 12px; }
+    .side { display: contents; }
+    #enemies    { order: 1; }
+    .statpanel  { order: 2; }
+    .boardwrap  { order: 3; }
+    #spellPanel { order: 4; }
+    .endpanel   { order: 5; }
+    .logpanel   { order: 6; }
+
+    /* Enemies become a compact wrapping grid rather than a tall list -- six
+       goblins as full-width blocks was most of a phone screen on its own. */
+    #enemies {
+      display: grid; gap: 6px; padding: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
+    .enemy { border-top: 0; padding: 6px 8px; border-radius: 8px;
+             background: rgba(255,255,255,.03); }
+    .enemy.target { background: rgba(255,255,255,.09); box-shadow: 0 0 0 1px var(--line) inset; }
+    .enemy .top { font-size: 13px; }
+    .enemy .tele { font-size: 11.5px; }
+
+    /* The status panel becomes a slim two-column row so it costs almost no
+       vertical space between the telegraph and the board. */
+    .statpanel { padding: 8px 10px; display: grid; gap: 2px 12px;
+                 grid-template-columns: 1fr 1fr; align-items: center; }
+    .statpanel .stat { font-size: 13px; }
+    .statpanel #buffs { grid-column: 1 / -1; }
+
+    .boardwrap { padding: 8px; }
+    /* Keep the whole board thumb-reachable AND visible alongside the
+       telegraph, rather than filling the viewport. */
+    #board { gap: 4px; max-width: min(100%, 72vh); margin: 0 auto; }
+    .endpanel { padding: 8px; }
+    /* The log is reference material on a phone, not something to scroll past
+       every turn. */
+    .logpanel #log { height: auto; max-height: 26vh; }
+  }
 
   .boardwrap { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
   #board {
@@ -389,6 +436,14 @@
     <h3 class="section-h">Tier piece (optional)</h3>
     <div class="cards sets" id="setCards"></div>
 
+    <!-- Sized by how many mana colours the build ends up with, so it has to
+         come after both the colour sockets and the tier pieces. -->
+    <div id="spellSection" class="hidden">
+      <h3 class="section-h">Spellbook <span id="spellSlotHint" class="hint"></span></h3>
+      <div class="cards mini" id="spellCards"></div>
+    </div>
+    <div class="hint" id="spellLocked">No mana socket, so no spells — bind a colour to mana to earn a spellbook.</div>
+
     <div class="hint" id="setupPreview"></div>
 
     <button class="beginbtn" id="beginBtn" disabled>Fill every socket to begin</button>
@@ -404,8 +459,11 @@
         <div id="board"></div>
         <div class="hint" id="legend"></div>
       </div>
-      <div>
-        <div class="panel">
+      <!-- `side` collapses to display:contents in portrait so these panels
+           become direct flex children of .game and can be re-ordered around
+           the board. Desktop keeps them as one right-hand column. -->
+      <div class="side">
+        <div class="panel statpanel">
           <div class="stat"><span>Health</span><span id="hpTxt"></span></div>
           <div class="bar"><i id="hpBar"></i></div>
           <div class="stat" id="manaRow"><span>Mana</span><span id="manaTxt"></span></div>
@@ -415,9 +473,9 @@
           <div id="buffs"></div>
         </div>
         <div class="panel" id="spellPanel"><div class="spells" id="spells"></div></div>
-        <div class="panel"><button class="endbtn" id="endBtn">End turn</button></div>
+        <div class="panel endpanel"><button class="endbtn" id="endBtn">End turn</button></div>
         <div class="panel" id="enemies"></div>
-        <div class="panel">
+        <div class="panel logpanel">
           <div id="log"></div>
           <div class="logbtns">
             <button id="dlBtn">Download log</button>
@@ -545,7 +603,24 @@ const VOID_STRENGTH = 2.0;        // void gem match: pays this many times a norm
 const VOID_SELFHIT_FRAC = 0.05;   // ...and this fraction of that also hits the player
 const POISON_PCT_MAX_HP = 0.08;   // poison special gem detonation: this fraction of target's max hp
 
-const FREEZE_STACKS_THRESHOLD = 3;   // status effect: 3 stacks -> 1 stun (ticks the same stagger meter)
+const FREEZE_STACKS_THRESHOLD = 3;   // status effect: 3 stacks -> 1 stun
+
+/* ---- spell tuning (derived 2026-08-01, see DESIGN.md "Spells") ----
+   PER_GEM = 2 means one gem is 2 damage OR 2 mana, so 1 mana == 1 damage and
+   value-per-mana must stay under 1.00 (balance failure #1); Fire is the
+   benchmark at 20/50 = 0.40. Costs below were priced off measured value, with
+   income calibrated against playtest eight's human anchor.
+
+   Damage Amplified / Ethereal Defence are SAME-TURN-ONLY and wipe at the end
+   of endTurn, so reaching either cap means chain-casting off a banked pool --
+   a storm-turn payoff, not a slow ramp. Caps are on the BONUS: +250% is 3.5x
+   damage, -100% is genuine immunity for that turn. Both are deliberately
+   allowed to run away with a turn. */
+const DMG_AMP_PER_STACK = 0.25;
+const DMG_AMP_CAP = 2.5;             // +250% bonus, i.e. 10 stacks
+const ETHEREAL_PER_STACK = 0.10;
+const ETHEREAL_CAP = 1.0;            // -100%, i.e. 10 stacks = immune
+const ARCANE_ARMOR_BLOCK = 25;
 
 const BLOODGOD_BLEED_MULT = 2;             // Blood for the Bloodgod 2pc: bleed stacks granted are doubled
 const BLOODGOD_MANA_PER_BLEED_DMG = 1;     // 4pc: mana gained per point of bleed damage dealt
@@ -748,9 +823,15 @@ const SPELLS = {
   heal:    { cost: 60, label: "Heal",    note: "+15 health", beneficial: true },
   fire:    { cost: 50, label: "Fire",    note: "20 to one" },
   thunder: { cost: 90, label: "Thunder", note: "12 to all" },
-  gamble:  { cost: 40, label: "Gambler's Gambit", note: "next 3-match also leaves a random chain gem (4/L/T, or line5 at 10%)" },
-  acid:    { cost: 70, label: "Acid Rain", note: `${ACID_DMG_PER_TURN} dmg/turn to every enemy, ${ACID_TURNS} turns` },
-  freeze:  { cost: 55, label: "Freeze Blast", note: `1 freeze stack on every enemy (${FREEZE_STACKS_THRESHOLD} stuns)` },
+  gamble:  { cost: 80, label: "Gambler's Gambit", note: "next 3-match also leaves a random chain gem (4/L/T, or line5 at 10%)" },
+  acid:    { cost: 75, label: "Acid Rain", note: `${ACID_DMG_PER_TURN} dmg/turn to every enemy, ${ACID_TURNS} turns` },
+  freeze:  { cost: 55, label: "Freeze Blast", note: `1 freeze stack on every enemy; at ${FREEZE_STACKS_THRESHOLD} it stuns, ignoring resolve` },
+  amplify: { cost: 55, label: "Damage Amplified",
+             note: `+${Math.round(DMG_AMP_PER_STACK * 100)}% damage this turn, stacks to +${Math.round(DMG_AMP_CAP * 100)}%` },
+  arcane_armor: { cost: 60, label: "Arcane Armor", note: `+${ARCANE_ARMOR_BLOCK} block`, beneficial: true },
+  ethereal: { cost: 15, label: "Ethereal Defence",
+              note: `-${Math.round(ETHEREAL_PER_STACK * 100)}% damage taken this turn, stacks to -${Math.round(ETHEREAL_CAP * 100)}%`,
+              beneficial: true },
 };
 
 // Full build-crafting: each of the 4 colours is an independent socket, and
@@ -828,18 +909,24 @@ const BASE_HP = 50;
 const PRESETS = {
   warden: {
     name: "Warden",
+    // No mana socket, so no spellbook -- `spells: []` is the honest default,
+    // not an oversight. Swap a socket to mana and the picker appears.
     picks: { R: "attack", G: "block", Y: "splash", B: "armour", line4: "cleave",
-             hardL: "stun", hardT: "dodge" },
+             hardL: "stun", hardT: "dodge", spells: [] },
   },
   bleeder: {
     name: "Bleeder",
     picks: { R: "bleed", G: "block", Y: "splash", B: "lifesteal", line4: "bleed_burst",
-             hardL: "bleed_spike", hardT: "bleed_detonate" },
+             hardL: "bleed_spike", hardT: "bleed_detonate", spells: [] },
   },
   stormcaller: {
     name: "Stormcaller",
+    // Two mana colours = 4 slots against a pool of 9, so this is a deliberate
+    // four: a nuke, a heal, the multiplier that rewards a storm turn, and the
+    // group DoT.
     picks: { R: "mana", G: "block", Y: "splash", B: "mana", line4: "spell_buff",
-             hardL: "free_spell", hardT: "double_next_spell" },
+             hardL: "free_spell", hardT: "double_next_spell",
+             spells: ["fire", "heal", "amplify", "acid"] },
   },
 };
 
@@ -943,6 +1030,71 @@ function normalizeSetKeys(setKeys) {
   return [setKeys[0] || null, setKeys[1] || null];
 }
 
+/* ---- the spellbook ----
+   Spells are no longer a class privilege: any build may take them, but has
+   to pay for them in sockets. Two spells per colour that actually produces
+   mana, counted AFTER tier-piece overrides. Mana lives in the red and blue
+   gem pools only, so the ceiling is 2 colours x 2 = 4 spells. No mana colour
+   means no spellbook at all -- socketing mana is what buys you one. */
+const SPELL_SLOTS_PER_MANA_COLOUR = 2;
+
+// What each colour ends up bound to once BOTH tier-piece slots have had
+// their say. Split out so the setup screen can size the spellbook from a
+// half-finished build, before the shape sockets are filled.
+function finalColors(picks, setKeys) {
+  const [k1, k2] = normalizeSetKeys(setKeys);
+  const matched = !!k1 && k1 === k2;
+  const colors = {};
+  for (const col of COLORS) if (picks[col]) colors[col] = picks[col];
+  const applyOverrides = bundle => {
+    if (!bundle || !bundle.colorOverrides) return;
+    for (const col of Object.keys(bundle.colorOverrides)) {
+      const eff = bundle.colorOverrides[col];
+      if (eff === null) delete colors[col]; else colors[col] = eff;
+    }
+  };
+  if (matched) { applyOverrides(SETS[k1].twoPc); applyOverrides(SETS[k1].fourPc); }
+  else for (const k of [k1, k2]) if (k) applyOverrides(SETS[k].twoPc);
+  return colors;
+}
+
+// Which spells this build is ALLOWED to pick from -- everything, unless a
+// tier piece narrows it. Mirrors buildLoadout's last-wins merge order.
+function spellPool(setKeys) {
+  const [k1, k2] = normalizeSetKeys(setKeys);
+  const matched = !!k1 && k1 === k2;
+  let pool = null;
+  const take = bundle => { if (bundle && bundle.spells) pool = bundle.spells; };
+  if (matched) { take(SETS[k1].twoPc); take(SETS[k1].fourPc); }
+  else for (const k of [k1, k2]) if (k) take(SETS[k].twoPc);
+  return pool || Object.keys(SPELLS);
+}
+
+/* How many spells this build may know. Two per mana colour.
+   ASSUMPTION, flagged: a set that casts for free (Archmage's wild charge
+   costs no mana) would be completely inert on a mana-less build, so it is
+   granted one slot pair on its own. Delete the wildChargeColor branch to
+   make it strictly mana-gated like everything else. */
+function spellSlotsFor(picks, setKeys) {
+  const colors = finalColors(picks, setKeys);
+  const mana = COLORS.filter(c => colors[c] === "mana").length;
+  if (mana) return mana * SPELL_SLOTS_PER_MANA_COLOUR;
+  const [k1, k2] = normalizeSetKeys(setKeys);
+  for (const k of [k1, k2]) {
+    if (!k) continue;
+    const s = SETS[k];
+    if ((s.twoPc && s.twoPc.wildChargeColor) || (s.fourPc && s.fourPc.wildChargeColor))
+      return SPELL_SLOTS_PER_MANA_COLOUR;
+  }
+  return 0;
+}
+
+// The most spells this build can actually name, once a pool smaller than the
+// slot count is taken into account.
+function spellsRequired(picks, setKeys) {
+  return Math.min(spellSlotsFor(picks, setKeys), spellPool(setKeys).length);
+}
+
 // picks = { R, G, Y, B: <gem name>, line4: <gem name>, hardL: <trigger>,
 //           hardT: <trigger>, line5: <trigger>, ultimate: <trigger> }
 // setKeys picks up to TWO tier-piece slots independently (see the SETS
@@ -968,7 +1120,9 @@ function buildLoadout(picks, setKeys) {
         if (eff === null) delete colors[col]; else colors[col] = eff;
       }
     }
-    if (bundle.spells) loadout.spells = bundle.spells;
+    // NOTE: a set's `spells` list is now a RESTRICTION on what is pickable,
+    // not the spellbook itself -- the player chooses that at setup. It is
+    // read by spellPool(); deliberately not copied onto the loadout here.
     if (bundle.locustColor) loadout.locustColor = bundle.locustColor;
     if (bundle.wildChargeColor) loadout.wildChargeColor = bundle.wildChargeColor;
     if (bundle.wildChargeThreshold) loadout.wildChargeThreshold = bundle.wildChargeThreshold;
@@ -992,6 +1146,12 @@ function buildLoadout(picks, setKeys) {
       blurbs.push(`${s.name} 2pc: ${s.twoPcBlurb}.`);
     }
   }
+
+  // The player's own spellbook, defensively re-filtered so a stale pick (one
+  // a tier piece forbids, or one over the slot count) can never reach a fight.
+  loadout.spells = (picks.spells || [])
+    .filter(n => SPELLS[n] && spellPool(setKeys).includes(n))
+    .slice(0, spellSlotsFor(picks, setKeys));
 
   if (names.length) {
     loadout.name = "Custom build — " + names.join(" + ");
@@ -1227,9 +1387,20 @@ function reshuffle() {
 /* Every line ever written, plus the tallies worth balancing around. The
    on-screen log is a tail; this is the whole thing, downloadable as a file. */
 const fullLog = [];
+/* The counters exist to answer specific open questions, not for their own
+   sake. dmgDealt is the calibration anchor (playtest eight measured 110-170
+   a turn against a HUMAN, and every spell cost is derived from it). The mana
+   block answers "can a player realistically earn ~120 a turn, and how much
+   can they bank inside one fight" -- the question the costs rest on.
+   ampPeak/etherealPeak test whether the same-turn amps ever actually get
+   stacked, and freezeStuns vs staggerTicks tests whether Freeze Blast's
+   resolve bypass is re-creating the permastun resolve was built to kill. */
 const stats = {
   shapes: {}, specials: 0, fusions: 0, combos: 0, fusionPairs: {},
   spells: {}, turns: 0, dmgTaken: 0, encounters: [],
+  dmgDealt: 0, manaGained: 0, manaSpent: 0, manaPeak: 0,
+  ampPeak: 0, etherealPeak: 0, freezeStuns: 0, staggerTicks: 0,
+  castsPerTurn: {},
 };
 
 function log(text, cls) {
@@ -1253,6 +1424,37 @@ const turnTotals = { R: 0, G: 0, Y: 0, B: 0 };
 function addTurnTotal(color, amount) {
   if (!color || !(color in turnTotals) || !amount) return;
   turnTotals[color] += amount;
+}
+
+/* ---- damage funnels ----
+   Damage is dealt at ~22 separate sites in this engine. Damage Amplified
+   (+25% a stack) and Ethereal Defence (-10% a stack) both need every one of
+   them to run through one place, so they now do. ANY new source of damage
+   must use dealDamage() or it silently ignores the amp spells, and any new
+   source of damage TO THE PLAYER must use incomingDamage().
+
+   Both amps are same-turn-only and wipe at the very end of endTurn, so
+   everything resolving inside the turn you cast them -- matches, spells,
+   locusts, bleed, acid, thorns -- is amplified. */
+function dmgAmpFactor() {
+  return 1 + DMG_AMP_PER_STACK * player.dmgAmpStacks;
+}
+
+// Returns the amount ACTUALLY dealt, so callers log the real number rather
+// than the pre-amp one -- the run log is the balancing instrument, so it
+// must never report a number the game didn't do.
+function dealDamage(enemy, amount) {
+  const final = Math.round(amount * dmgAmpFactor());
+  enemy.hp -= final;
+  stats.dmgDealt += final;
+  return final;
+}
+
+// Reduction lands BEFORE block/armour/shield: it shrinks the incoming hit,
+// and your defences then soak what is left of it.
+function incomingDamage(raw) {
+  const cut = Math.min(ETHEREAL_CAP, ETHEREAL_PER_STACK * player.etherealStacks);
+  return { dmg: Math.round(raw * (1 - cut)), cut };
 }
 
 function applyEffect(effect, value, tag, color) {
@@ -1280,7 +1482,7 @@ function applyEffect(effect, value, tag, color) {
   }
   const t = currentTarget();
   if (effect === "attack") {
-    if (t) { t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit"); addTurnTotal(color, value); }
+    if (t) { const d = dealDamage(t, value); log(`${tag}: ${d} damage to ${t.name}`, "hit"); addTurnTotal(color, d); }
   } else if (effect === "bleed") {
     if (t) {
       let s = Math.max(1, Math.floor(value / 4));
@@ -1329,17 +1531,20 @@ function applyEffect(effect, value, tag, color) {
     else log(`${tag}: +${healed} health`, "good");
     addTurnTotal(color, healed + totalShield);
   } else if (effect === "mana") {
-    player.mana += value; log(`${tag}: +${value} mana`, "good");
+    player.mana += value; stats.manaGained += value;
+    stats.manaPeak = Math.max(stats.manaPeak, player.mana);
+    { const rec = stats.encounters[encounter]; if (rec) rec.peak = Math.max(rec.peak || 0, player.mana); }
+    log(`${tag}: +${value} mana`, "good");
     addTurnTotal(color, value);
   } else if (effect === "splash") {
     const others = living().filter(e => e !== t);
     if (others.length) {
       const each = Math.max(1, Math.floor(value / 2));
-      others.forEach(e => e.hp -= each);
-      log(`${tag}: ${each} splash to ${others.length} other(s)`, "hit");
-      addTurnTotal(color, each * others.length);
+      const d = others.map(e => dealDamage(e, each))[0];
+      log(`${tag}: ${d} splash to ${others.length} other(s)`, "hit");
+      addTurnTotal(color, d * others.length);
     } else if (t) {
-      t.hp -= value; log(`${tag}: ${value} damage to ${t.name}`, "hit");
+      const d2 = dealDamage(t, value); log(`${tag}: ${d2} damage to ${t.name}`, "hit");
       addTurnTotal(color, value);
     }
   } else if (effect === "sharpen") {
@@ -1357,9 +1562,9 @@ function applyEffect(effect, value, tag, color) {
       const missingFrac = t.maxHp ? Math.max(0, Math.min(1, (t.maxHp - t.hp) / t.maxHp)) : 0;
       const mult = 1 + (EXECUTE_BONUS_MULT_CAP - 1) * missingFrac;
       const dealt = Math.floor(value * mult);
-      t.hp -= dealt;
-      log(`${tag}: execute hits ${t.name} for ${dealt}`, "hit");
-      addTurnTotal(color, dealt);
+      const d3 = dealDamage(t, dealt);
+      log(`${tag}: execute hits ${t.name} for ${d3}`, "hit");
+      addTurnTotal(color, d3);
     }
   } else if (effect === "focus") {
     // Banks a stack rather than paying out anything itself -- see the
@@ -1405,15 +1610,15 @@ function applySeededGem(color, gemCount, tag) {
   if (!t) return;
   if (color === "X") {
     const value = Math.floor(gemCount * PER_GEM * VOID_STRENGTH * valueMult);
-    t.hp -= value;
-    const selfhit = Math.max(1, Math.floor(value * VOID_SELFHIT_FRAC));
+    const dealtVoid = dealDamage(t, value);
+    const selfhit = Math.max(1, Math.floor(dealtVoid * VOID_SELFHIT_FRAC));
     player.hp -= selfhit;
     log(`${tag}: void gem hits ${t.name} for ${value} (and you for ${selfhit})`, "hit");
     if (loadout.voidGift4pc) {
       // 4pc: matched void gems spawn more, and void cascades chip
       // everything on the board (living enemies) for a flat 1.
       const placed = seedGems("X", 1);
-      for (const e of living()) e.hp -= 1;
+      for (const e of living()) dealDamage(e, 1);
       if (placed) log(`${tag}: void cascade seeds another void gem, 1 damage to all enemies`, "hit");
     }
   }
@@ -1446,12 +1651,11 @@ function firePoisonGem() {
   const pct = Math.round(POISON_PCT_MAX_HP * 100);
   if (aoe) {
     let total = 0;
-    for (const e of targets) { const dmg = Math.floor(e.maxHp * POISON_PCT_MAX_HP); e.hp -= dmg; total += dmg; }
+    for (const e of targets) { total += dealDamage(e, Math.floor(e.maxHp * POISON_PCT_MAX_HP)); }
     log(`** poison gem detonates on every enemy for ${pct}% max hp each (${total} total)`, "spec");
   } else {
     const e = targets[0];
-    const dmg = Math.floor(e.maxHp * POISON_PCT_MAX_HP);
-    e.hp -= dmg;
+    const dmg = dealDamage(e, Math.floor(e.maxHp * POISON_PCT_MAX_HP));
     log(`** poison gem detonates on ${e.name} for ${dmg} (${pct}% max hp)`, "spec");
   }
 }
@@ -1469,7 +1673,7 @@ function checkAceOfClubs() {
     const others = enemies.filter(o => o !== e && o.hp > 0);
     if (!others.length) continue;
     const dmg = Math.max(1, Math.floor(e.maxHp * ACE_OF_CLUBS_EXPLODE_FRAC));
-    others.forEach(o => o.hp -= dmg);
+    others.forEach(o => dealDamage(o, dmg));
     log(`** ${e.name} explodes for ${dmg} to ${others.length} other enem${others.length === 1 ? "y" : "ies"}`, "spec");
     // 4pc: the chain only continues to whoever THAT explosion also killed
     // -- without it, 2pc alone still does its own single round of
@@ -1488,6 +1692,7 @@ function applyStagger(victim, tag, note) {
     // Extending a big enemy's stun costs as much as causing it, or one
     // stun a turn re-locks a staggered dragon forever.
     victim.stunMeter += 1;
+    stats.staggerTicks++;
     if (victim.stunMeter >= victim.resolve) {
       victim.stunMeter = 0;
       victim.stunned += 1;
@@ -1511,7 +1716,18 @@ function applyFreeze(victim, tag) {
   victim.freezeStacks += 1;
   if (victim.freezeStacks >= FREEZE_STACKS_THRESHOLD) {
     victim.freezeStacks -= FREEZE_STACKS_THRESHOLD;
-    applyStagger(victim, tag, " (frozen solid)");
+    /* DESIGNER RULING 2026-08-01: freeze IGNORES staggering. It stuns
+       outright rather than ticking the resolve meter, which makes it the one
+       stun a dragon cannot shrug off -- and is the whole identity of the
+       spell. It previously routed through applyStagger(); that is the
+       behaviour this deliberately replaces, so don't "fix" it back.
+
+       This is also the pool's main balance risk, and is instrumented:
+       stats.freezeStuns counts resolve>1 enemies stunned this way. If the
+       dragon's breath clock stops running in the logs, raise the cost. */
+    victim.stunned += 1;
+    if (victim.resolve > 1) stats.freezeStuns++;
+    log(`>> ${tag}: ${victim.name} freezes solid — stunned (ignores resolve)`, "spec");
   } else {
     log(`>> ${tag}: ${victim.name} freezing ${victim.freezeStacks}/${FREEZE_STACKS_THRESHOLD}`, "spec");
   }
@@ -1552,9 +1768,9 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     const bleeding = living().filter(e => e.bleed);
     if (bleeding.length) {
       const v = bleeding.reduce((a, b) => (b.bleed > a.bleed ? b : a));
-      const burst = v.bleed * 3;
-      v.hp -= burst;
-      log(`>> ${tag} TRIGGER: ${v.name}'s ${v.bleed} bleed detonates for ${burst}`, "spec");
+      const stacks = v.bleed;
+      const burst = dealDamage(v, stacks * 3);
+      log(`>> ${tag} TRIGGER: ${v.name}'s ${stacks} bleed detonates for ${burst}`, "spec");
       v.bleed = 0;
     } else if (t) {
       // Overflow rather than waste: with nothing to pop, seed the next one
@@ -1568,8 +1784,8 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     const ts = living();
     if (ts.length) {
       const each = Math.max(1, Math.floor(value / 2));
-      ts.forEach(e => e.hp -= each);
-      log(`>> ${tag} TRIGGER: cleave hits ${ts.length} for ${each}`, "spec");
+      const dc = ts.map(e => dealDamage(e, each))[0];
+      log(`>> ${tag} TRIGGER: cleave hits ${ts.length} for ${dc}`, "spec");
     }
   } else if (trigger === "spell_buff") {
     const pct = Math.round(LINE4_SPELL_BUFF * 100);
@@ -1601,9 +1817,9 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     const bleeding = living().filter(e => e.bleed);
     if (bleeding.length) {
       const v = bleeding.reduce((a, b) => (b.bleed > a.bleed ? b : a));
-      const burst = v.bleed * 3;
-      v.hp -= burst;
-      log(`>> ${tag} TRIGGER: ${v.name}'s ${v.bleed} bleed spikes for ${burst} (stacks kept)`, "spec");
+      const stacks2 = v.bleed;
+      const burst = dealDamage(v, stacks2 * 3);
+      log(`>> ${tag} TRIGGER: ${v.name}'s ${stacks2} bleed spikes for ${burst} (stacks kept)`, "spec");
     } else if (t) {
       const s = Math.max(2, Math.floor(value / 3));
       t.bleed += s;
@@ -1678,7 +1894,7 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     const bleeding = living().filter(e => e.bleed);
     if (bleeding.length) {
       let total = 0;
-      bleeding.forEach(e => { const burst = e.bleed * 3; e.hp -= burst; total += burst; });
+      bleeding.forEach(e => { total += dealDamage(e, e.bleed * 3); });
       log(`>> ${tag} TRIGGER: bleed spikes on ${bleeding.length} enem${bleeding.length === 1 ? "y" : "ies"} for ${total} total (stacks kept)`, "spec");
     } else if (t) {
       const s = Math.max(2, Math.floor(value / 3));
@@ -2097,8 +2313,7 @@ function fireCascadeBonus(totalMatches, totalGems, firstMatchGems) {
   for (let i = 0; i < hits; i++) {
     const t = currentTarget();
     if (!t) break;
-    t.hp -= perStrike;
-    dealt += perStrike;
+    dealt += dealDamage(t, perStrike);
     landed++;
   }
   if (dealt) {
@@ -2114,11 +2329,11 @@ function spellCost(name) {
   return Math.max(1, Math.round(SPELLS[name].cost * loadout.spellCost));
 }
 
-// Which spells this build actually knows -- defaults to all of them unless
-// a loadout explicitly restricts the list (Archmage of Chaos does, so
-// dropping "heal" from it removes the misfire risk entirely).
+// Which spells this build actually knows -- exactly what the player chose on
+// the setup screen. Empty for any build with no mana colour, which is what
+// makes the spell panel disappear entirely.
 function availableSpells() {
-  return loadout.spells || Object.keys(SPELLS);
+  return loadout.spells || [];
 }
 
 /* The actual effect of a spell, split out from cast() so an autonomous proc
@@ -2147,13 +2362,12 @@ function resolveSpellEffect(name, factor, chaotic) {
   if (name === "fire") {
     const t = currentTarget();
     if (!t) return { text: "nothing to burn", cls: "good" };
-    const dmg = Math.round(20 * factor);
-    t.hp -= dmg;
+    const dmg = dealDamage(t, 20 * factor);
     return { text: `fire hits ${t.name} for ${dmg}${boosted}`, cls: "hit" };
   }
   if (name === "thunder") {
-    const dmg = Math.round(12 * factor);
-    living().forEach(e => e.hp -= dmg);
+    const alive = living();
+    const dmg = alive.length ? alive.map(e => dealDamage(e, 12 * factor))[0] : 0;
     return { text: `thunder hits everything for ${dmg}${boosted}`, cls: "hit" };
   }
   if (name === "gamble") {
@@ -2168,6 +2382,35 @@ function resolveSpellEffect(name, factor, chaotic) {
   if (name === "freeze") {
     for (const e of living()) applyFreeze(e, "Freeze blast");
     return { text: `freeze blast chills everything${boosted}`, cls: "hit" };
+  }
+  if (name === "amplify") {
+    const max = Math.round(DMG_AMP_CAP / DMG_AMP_PER_STACK);
+    if (player.dmgAmpStacks >= max)
+      return { text: `damage amp already capped (+${Math.round(DMG_AMP_CAP * 100)}%)`, cls: "good" };
+    player.dmgAmpStacks = Math.min(max, player.dmgAmpStacks + Math.max(1, Math.round(factor)));
+    stats.ampPeak = Math.max(stats.ampPeak, player.dmgAmpStacks);
+    return { text: `damage amplified — +${Math.round((dmgAmpFactor() - 1) * 100)}% this turn`, cls: "good" };
+  }
+  if (name === "arcane_armor") {
+    const amt = Math.round(ARCANE_ARMOR_BLOCK * factor);
+    // A misfire hands the block to an enemy -- wasted rather than harmful,
+    // the right weight of punishment for a defensive misfire.
+    if (misfire) {
+      const alive = living();
+      if (alive.length) return { text: `arcane armor sheathes ${pick(alive).name} instead — wasted`, cls: "hit" };
+    }
+    player.block += amt;
+    return { text: `arcane armor: +${amt} block${boosted}`, cls: "good" };
+  }
+  if (name === "ethereal") {
+    const max = Math.round(ETHEREAL_CAP / ETHEREAL_PER_STACK);
+    if (misfire) return { text: "ethereal defence dissipates — the weave slips", cls: "hit" };
+    if (player.etherealStacks >= max)
+      return { text: `ethereal defence already capped (-${Math.round(ETHEREAL_CAP * 100)}%)`, cls: "good" };
+    player.etherealStacks = Math.min(max, player.etherealStacks + Math.max(1, Math.round(factor)));
+    stats.etherealPeak = Math.max(stats.etherealPeak, player.etherealStacks);
+    const cut = Math.min(ETHEREAL_CAP, ETHEREAL_PER_STACK * player.etherealStacks);
+    return { text: `ethereal defence — ${Math.round(cut * 100)}% of damage turned aside this turn`, cls: "good" };
   }
   return { text: "?", cls: "good" };
 }
@@ -2203,6 +2446,10 @@ function cast(name) {
   }
   if (player.mana < cost) return;
   player.mana -= cost;
+  stats.manaSpent += cost;
+  // Keyed by turn so the report can show how often a turn is a STORM turn --
+  // the thing flat costs were meant to preserve.
+  stats.castsPerTurn[stats.turns] = (stats.castsPerTurn[stats.turns] || 0) + 1;
   if (free) player.nextSpellFree = false;
   else if (player.focusStacks) player.focusStacks = 0;
   stats.spells[name] = (stats.spells[name] || 0) + 1;
@@ -2224,7 +2471,7 @@ async function endTurn() {
       const alive = living();
       if (!alive.length) break;
       const victim = pick(alive);
-      victim.hp -= 1;
+      dealDamage(victim, 1);
       bitten[victim.name] = (bitten[victim.name] || 0) + 1;
     }
     for (const [name, dmg] of Object.entries(bitten)) log(`locusts swarm ${name} for ${dmg}`, "hit");
@@ -2232,12 +2479,15 @@ async function endTurn() {
   }
 
   const threshold = loadout.wildChargeThreshold;
+  // A spellbook can now be EMPTY (no mana colour), and rolling a random spell
+  // out of nothing would be an outright crash -- bank the charges instead.
+  const wildPool = availableSpells();
   let castsThisTurn = 0;
-  if (threshold && player.wildCharges >= threshold) {
+  if (threshold && wildPool.length && player.wildCharges >= threshold) {
     let fires = Math.floor(player.wildCharges / threshold);
     player.wildCharges %= threshold; // overflow carries, not wasted
     for (let i = 0; i < fires; i++) {
-      const name = pick(availableSpells());
+      const name = pick(wildPool);
       // Chain-gem spell buffs empower a wild-charge cast exactly like a
       // manual one -- not just mana-cost casts. Note this SPENDS them, same
       // as a manual cast would -- an autofire can consume a banked buff you
@@ -2253,7 +2503,7 @@ async function endTurn() {
       if (loadout.archmageOverload) {
         if (player.wildChargeCastCount % ARCHMAGE_DOUBLE_EVERY_NTH_CAST === 0) factor *= 2;
         if (castsThisTurn > ARCHMAGE_DOUBLE_EVERY_NTH_CAST && Math.random() < ARCHMAGE_IMPLODE_CHANCE) {
-          for (const e of living()) e.hp -= ARCHMAGE_IMPLODE_DAMAGE;
+          for (const e of living()) dealDamage(e, ARCHMAGE_IMPLODE_DAMAGE);
           log(`wild charge overloads -- implodes for ${ARCHMAGE_IMPLODE_DAMAGE} to everything`, "hit");
         }
       }
@@ -2266,7 +2516,7 @@ async function endTurn() {
   log("— enemy turn —", "turn");
   for (const e of living()) {
     if (e.bleed) {
-      e.hp -= e.bleed; log(`${e.name} bleeds for ${e.bleed}`, "good");
+      const bl = dealDamage(e, e.bleed); log(`${e.name} bleeds for ${bl}`, "good");
       if (loadout.bleedGrantsMana) {
         const gained = e.bleed * BLOODGOD_MANA_PER_BLEED_DMG;
         player.mana += gained;
@@ -2274,8 +2524,8 @@ async function endTurn() {
       }
     }
     if (e.acidTurns > 0) {
-      e.hp -= e.acidDmg; e.acidTurns--;
-      log(`${e.name} corrodes for ${e.acidDmg} (${e.acidTurns} turn(s) left)`, "hit");
+      const ac = dealDamage(e, e.acidDmg); e.acidTurns--;
+      log(`${e.name} corrodes for ${ac} (${e.acidTurns} turn(s) left)`, "hit");
     }
   }
   let negatedTotal = 0;
@@ -2283,7 +2533,8 @@ async function endTurn() {
     if (e.stunned) { e.stunned--; log(`${e.name} is stunned and loses its action`, "good"); continue; }
     e.countdown--;
     if (e.countdown <= 0) {
-      const [label, , dmg] = e.pending;
+      const [label, , rawDmg] = e.pending;
+      const { dmg, cut } = incomingDamage(rawDmg);
       if (player.dodgeCharges > 0) {
         player.dodgeCharges--;
         log(`${e.name} uses ${label}: DODGED, no damage taken`, "good");
@@ -2297,8 +2548,8 @@ async function endTurn() {
         const others = living().filter(o => o !== e);
         if (others.length) {
           const victim = pick(others);
-          victim.hp -= dmg;
-          log(`${e.name} uses ${label}, confused, and hits ${victim.name} for ${dmg}`, "hit");
+          const cf = dealDamage(victim, dmg);
+          log(`${e.name} uses ${label}, confused, and hits ${victim.name} for ${cf}`, "hit");
           queueNext(e);
           continue;
         }
@@ -2335,7 +2586,7 @@ async function endTurn() {
       let thornNote = "";
       if (taken && loadout.roseThorns) {
         const reflected = Math.max(1, Math.round(taken * ROSE_THORNS_REFLECT_FRAC));
-        e.hp -= reflected;
+        dealDamage(e, reflected);
         thornNote = `, ${reflected} reflected back`;
         if (loadout.roseThornsBleed) {
           const s = Math.max(1, Math.floor(reflected / 4));
@@ -2344,6 +2595,7 @@ async function endTurn() {
         }
       }
       const parts = [];
+      if (cut) parts.push(`${rawDmg - dmg} turned aside (${Math.round(cut * 100)}% ethereal)`);
       if (blocked) parts.push(`${blocked} blocked`);
       if (soaked) parts.push(`${soaked} soaked by armour`);
       if (shielded) parts.push(`${shielded} absorbed by shield`);
@@ -2358,7 +2610,7 @@ async function endTurn() {
     if (livingNow.length) {
       const each = Math.floor(negatedTotal / livingNow.length);
       const remainder = negatedTotal - each * livingNow.length;
-      livingNow.forEach((e, i) => { e.hp -= each + (i < remainder ? 1 : 0); });
+      livingNow.forEach((e, i) => { dealDamage(e, each + (i < remainder ? 1 : 0)); });
       log(`negated damage reflected -- ${negatedTotal} split across ${livingNow.length} enem${livingNow.length === 1 ? "y" : "ies"}`, "good");
     }
     player.dmgNegateNextTurn = false;
@@ -2385,6 +2637,11 @@ async function endTurn() {
   player.tactician4pcUsedThisTurn = 0;
   player.dmgTakenLastTurn = player.dmgTakenThisTurn;
   player.dmgTakenThisTurn = 0;
+  // The two amp spells are explicitly "this turn", so they wipe HERE --
+  // after the enemy has swung (Ethereal must still be up for it) and after
+  // every tick the amp should have boosted.
+  player.dmgAmpStacks = 0;
+  player.etherealStacks = 0;
   swipes = SWIPES_PER_TURN;
   for (const c of COLORS) turnTotals[c] = 0;  // "this turn" counters above the gem legend
   // spellBuffStacks, doubleNext, nextSpellFree, and banked dodgeCharges all
@@ -2408,6 +2665,9 @@ function closeEncounter(outcome) {
     rec.outcome = outcome;
     rec.turns = stats.turns - rec.turnsAt;
     rec.hpEnd = Math.max(0, player.hp);
+    rec.manaIn = stats.manaGained - rec.manaAt;
+    rec.manaOut = stats.manaSpent - rec.spentAt;
+    rec.dmg = stats.dmgDealt - rec.dmgAt;
   }
 }
 
@@ -2503,6 +2763,10 @@ function buildReport() {
   L.push(`health         ${Math.max(0, player.hp)}/${player.maxHp}`);
   L.push(`turns          ${stats.turns}`);
   L.push(`damage taken   ${stats.dmgTaken}`);
+  // The chosen spellbook is a player decision the log has to carry, or a
+  // "spells cast: none" line downstream is unreadable -- no way to tell a
+  // build that couldn't cast from one that chose not to.
+  L.push(`spellbook      ${availableSpells().join("  ") || "none (no mana colour)"}`);
   L.push("");
   L.push("shapes formed");
   for (const s of RANK) {
@@ -2538,11 +2802,43 @@ function buildReport() {
   }
   L.push(`spells cast      ${Object.keys(stats.spells).length
     ? Object.entries(stats.spells).map(([k, v]) => k + " x" + v).join(", ") : "none"}`);
+  /* ---- the section the spell costs are calibrated against ----
+     Every number below answers a question that is currently open. Don't drop
+     any of them without checking docs/OPEN-QUESTIONS.md first. */
+  const tn = Math.max(1, stats.turns);
+  const totalShapes = Object.values(stats.shapes).reduce((a, b) => a + b, 0) || 1;
+  L.push("");
+  L.push("output and economy");
+  L.push(`  damage dealt     ${stats.dmgDealt}  (${(stats.dmgDealt / tn).toFixed(1)}/turn)` +
+         `   <- the calibration anchor; playtest eight measured 110-170`);
+  L.push(`  damage taken     ${stats.dmgTaken}  (${(stats.dmgTaken / tn).toFixed(1)}/turn)`);
+  L.push(`  specials/match   ${(stats.specials / totalShapes * 100).toFixed(1)}%` +
+         `   <- skill-invariant anchor; every logged run so far says 27-28%`);
+  if (stats.manaGained || stats.manaSpent) {
+    const casts = Object.values(stats.castsPerTurn);
+    L.push(`  mana earned      ${stats.manaGained}  (${(stats.manaGained / tn).toFixed(1)}/turn)`);
+    L.push(`  mana spent       ${stats.manaSpent}  (${(stats.manaSpent / Math.max(1, stats.manaGained) * 100).toFixed(0)}% of what you earned)`);
+    L.push(`  biggest bank     ${stats.manaPeak}   <- the real ceiling on any one play`);
+    L.push(`  turns that cast  ${casts.length} of ${stats.turns}` +
+           (casts.length ? `   busiest turn: ${Math.max(...casts)} casts` : ""));
+  } else {
+    L.push("  mana             none (no colour bound to mana)");
+  }
+  if (stats.ampPeak || stats.etherealPeak)
+    L.push(`  peak stacks      amplify ${stats.ampPeak}/10   ethereal ${stats.etherealPeak}/10` +
+           `   <- do the same-turn amps ever actually get stacked?`);
+  if (stats.freezeStuns || stats.staggerTicks)
+    L.push(`  big-enemy stuns  freeze (ignores resolve) ${stats.freezeStuns}` +
+           `   vs gear stagger ticks ${stats.staggerTicks}` +
+           `   <- is the freeze bypass a boss-delete button?`);
+
   L.push("");
   L.push("encounters");
   stats.encounters.forEach((e, i) => {
     L.push(`  ${i + 1}. ${e.name.padEnd(26)} ${String(e.turns ?? "-").padStart(3)} turns   ` +
            `hp ${e.hpStart} -> ${e.hpEnd ?? "-"}   ${e.outcome || "not reached"}`);
+    if (e.manaIn !== undefined && (e.manaIn || e.manaOut))
+      L.push(`      mana +${e.manaIn} -${e.manaOut}, peak ${e.peak || 0}   damage ${e.dmg ?? 0}`);
   });
   L.push("");
   L.push("---------------- full log ----------------");
@@ -2964,7 +3260,9 @@ function render(fresh) {
   q("swipeTxt").textContent = swipes;
 
   // A build with no mana colour can never cast; don't show it a dead panel.
-  const casts = Object.values(loadout.colors).includes("mana");
+  // Driven by the chosen spellbook, not the mana socket -- a build can have
+  // mana and still have deliberately taken fewer spells than it could.
+  const casts = availableSpells().length > 0;
   document.getElementById("spellPanel").classList.toggle("hidden", !casts);
   document.getElementById("manaRow").classList.toggle("hidden", !casts);
   document.getElementById("manaBarRow").classList.toggle("hidden", !casts);
@@ -3038,6 +3336,11 @@ function startEncounter() {
   const [title, make] = encounterDef(encounter);
   stats.encounters[encounter] = {
     name: title, hpStart: player.hp, turnsAt: stats.turns, done: false,
+    // Mana resets between combats, so per-fight income and peak bank are the
+    // numbers that actually constrain what a spell may cost -- not lifetime
+    // totals. Snapshot the running counters and diff them at close.
+    manaAt: stats.manaGained, spentAt: stats.manaSpent, dmgAt: stats.dmgDealt,
+    peak: 0,
   };
   enemies = make();
   targetIdx = 0;
@@ -3049,6 +3352,8 @@ function startEncounter() {
   player.shield = 0;
   player.locusts = 0;
   player.wildCharges = 0;
+  player.dmgAmpStacks = 0;
+  player.etherealStacks = 0;
   player.doubleNext = false;
   player.spellBuffStacks = 0;
   player.doubleNextSwipe = false;
@@ -3086,6 +3391,7 @@ function begin(picksArg, setKeys) {
   loadout = buildLoadout(picksArg, setKeys);
   player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
              shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0,
+             dmgAmpStacks: 0, etherealStacks: 0,
              doubleNextSwipe: false, nextSpellFree: false, dodgeStacks: 0, dodgeCharges: 0,
              dmgTakenThisTurn: 0, dmgTakenLastTurn: 0,
              cheatedDeath: false,          // Razor's End 2pc -- once per encounter
@@ -3117,7 +3423,8 @@ function begin(picksArg, setKeys) {
 /* ============================ setup screen ============================ */
 
 const COLOUR_NAME = { R: "Red", G: "Green", Y: "Yellow", B: "Blue" };
-let picks = { R: null, G: null, Y: null, B: null, line4: null, hardL: null, hardT: null, line5: null, ultimate: null };
+let picks = { R: null, G: null, Y: null, B: null, line4: null, hardL: null, hardT: null,
+              line5: null, ultimate: null, spells: [] };
 // Two independent tier-piece slots: click a card once for its 2pc bonus,
 // click the SAME card again to escalate to the full 2pc+4pc (the old
 // "one set" behaviour), click a third time to clear it. Two DIFFERENT
@@ -3158,7 +3465,56 @@ function renderSetupPreview() {
   }).join(" ");
   const shapeChips = Object.entries(l.shapes).map(([s, t]) =>
     `<span class="chip">${MARK[s] || s} → ${t.replace(/_/g, " ")}</span>`).join(" ");
-  el.innerHTML = `<b>${l.name}</b> (${l.hp} hp) &nbsp; ${colourChips} &nbsp; ${shapeChips}`;
+  const spellChips = (l.spells || []).map(n =>
+    `<span class="chip">✧ ${SPELLS[n].label}</span>`).join(" ");
+  el.innerHTML = `<b>${l.name}</b> (${l.hp} hp) &nbsp; ${colourChips} &nbsp; ${shapeChips}`
+    + (spellChips ? ` &nbsp; ${spellChips}` : "");
+}
+
+// A build that has earned spell slots must actually name them before it can
+// start -- an unspent slot is a mistake, not a choice.
+function spellbookFilled() {
+  return picks.spells.length === spellsRequired(picks, [pickedSet1, pickedSet2]);
+}
+
+/* The spellbook is the one part of setup that reshapes itself as you build:
+   its size follows the mana sockets and the tier pieces, so it is re-rendered
+   on every selection change rather than drawn once up front. */
+function renderSpellPicker() {
+  const sets = [pickedSet1, pickedSet2];
+  const need = spellsRequired(picks, sets);
+  const pool = spellPool(sets);
+  const slots = spellSlotsFor(picks, sets);
+
+  // Prune picks the current sockets or tier pieces no longer permit --
+  // dropping a mana socket has to take its spells with it.
+  picks.spells = picks.spells.filter(n => pool.includes(n)).slice(0, need);
+
+  document.getElementById("spellSection").classList.toggle("hidden", need === 0);
+  document.getElementById("spellLocked").classList.toggle("hidden", need > 0);
+  if (!need) return;
+
+  const over = slots > pool.length
+    ? ` (${slots} slots earned, only ${pool.length} spells exist yet)` : "";
+  document.getElementById("spellSlotHint").textContent =
+    `— pick ${need}: ${picks.spells.length}/${need} chosen${over}`;
+
+  document.getElementById("spellCards").innerHTML = pool.map(n => {
+    const sp = SPELLS[n];
+    return `<div class="card" data-spell="${n}">
+      <h3>${sp.label}</h3><p>${sp.note} — ${sp.cost} mana</p></div>`;
+  }).join("");
+  document.querySelectorAll("#spellCards .card").forEach(c => {
+    const n = c.dataset.spell;
+    c.classList.toggle("selected", picks.spells.includes(n));
+    c.onclick = () => {
+      const i = picks.spells.indexOf(n);
+      if (i >= 0) picks.spells.splice(i, 1);
+      else if (picks.spells.length < need) picks.spells.push(n);
+      else return;                      // book is full -- deselect one first
+      refreshSetupSelection();
+    };
+  });
 }
 
 function refreshSetupSelection() {
@@ -3191,10 +3547,15 @@ function refreshSetupSelection() {
     if (badge) badge.textContent = (inSlot1 && inSlot2) ? "(2pc + 4pc)" : (inSlot1 || inSlot2) ? "(2pc)" : "";
   });
 
+  renderSpellPicker();   // must run before the button state -- it prunes picks
+
   const filled = allSocketsFilled();
+  const book = spellbookFilled();
   const btn = document.getElementById("beginBtn");
-  btn.disabled = !filled;
-  btn.textContent = filled ? "Begin the dungeon" : "Fill every socket to begin";
+  btn.disabled = !(filled && book);
+  btn.textContent = !filled ? "Fill every socket to begin"
+    : !book ? `Choose ${spellsRequired(picks, [pickedSet1, pickedSet2]) - picks.spells.length} more spell(s) to begin`
+    : "Begin the dungeon";
   renderSetupPreview();
 }
 
@@ -3272,15 +3633,19 @@ document.querySelectorAll("#setCards .card").forEach(c => c.onclick = () => {
   refreshSetupSelection();
 });
 document.querySelectorAll("#presetCards .card").forEach(c => c.onclick = () => {
-  picks = Object.assign({}, PRESETS[c.dataset.preset].picks);
+  const p = PRESETS[c.dataset.preset].picks;
+  // Copy the spell list rather than aliasing it -- the picker mutates
+  // picks.spells in place, and that must never write back into the preset.
+  picks = Object.assign({}, p, { spells: (p.spells || []).slice() });
   refreshSetupSelection();
 });
 document.getElementById("advancedToggle").onchange = e => {
   document.getElementById("advancedSection").classList.toggle("hidden", !e.target.checked);
 };
 document.getElementById("beginBtn").onclick = () => {
-  if (allSocketsFilled()) begin(picks, [pickedSet1, pickedSet2]);
+  if (allSocketsFilled() && spellbookFilled()) begin(picks, [pickedSet1, pickedSet2]);
 };
+refreshSetupSelection();   // draws the empty spellbook state on first load
 </script>
 </body>
 </html>
