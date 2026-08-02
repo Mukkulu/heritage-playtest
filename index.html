@@ -362,6 +362,14 @@
   #log .combo { color: #d9a3f2; font-weight: 700; }
   #log .turn { color: #6d778d; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
 
+  .notebox { display: flex; gap: 6px; margin-top: 10px; }
+  .notebox input {
+    flex: 1; min-width: 0; padding: 6px 8px; font: inherit; font-size: 12.5px;
+    border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel2); color: var(--text);
+  }
+  .notebox button { font-size: 12.5px; padding: 6px 10px; }
+  #log .note { color: #9fd8f2; font-weight: 700; }
   .logbtns { display: flex; gap: 8px; margin-top: 10px; }
   .logbtns button { flex: 1; font-size: 13px; padding: 6px; }
 
@@ -477,6 +485,14 @@
         <div class="panel" id="enemies"></div>
         <div class="panel logpanel">
           <div id="log"></div>
+          <!-- Notes are timestamped into the log at the turn you wrote them,
+               so "this felt wrong" lands next to the thing that caused it
+               rather than being reconstructed afterwards. -->
+          <div class="notebox">
+            <input id="noteInput" type="text" maxlength="300"
+                   placeholder="Note something (enter to add) — lands in the log at this turn">
+            <button id="noteBtn">Add</button>
+          </div>
           <div class="logbtns">
             <button id="dlBtn">Download log</button>
             <button id="cpBtn">Copy log</button>
@@ -494,6 +510,11 @@
       <p class="sub" style="margin:0 0 8px">
         Send this run to the designer — helps tune the game. Totally optional.
       </p>
+      <textarea id="testerComment" rows="3" maxlength="1500"
+                placeholder="What should the designer look at? (optional) — e.g. a build that felt off, something you couldn't tell was working, a spell you never used"
+                style="width:100%;max-width:340px;margin:0 auto 8px;display:block;padding:8px;
+                       border-radius:8px;border:1px solid var(--line);background:var(--panel2);
+                       color:var(--text);font:inherit;font-size:13px;resize:vertical"></textarea>
       <input id="testerName" type="text" placeholder="Your name (optional)"
              style="width:100%;max-width:340px;margin:0 auto 8px;display:block;padding:8px;
                     border-radius:8px;border:1px solid var(--line);background:var(--panel2);
@@ -521,7 +542,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-01";
+const GAME_VERSION = "2026-08-02";
 
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
@@ -1403,6 +1424,20 @@ const stats = {
   castsPerTurn: {},
 };
 
+/* Notes a tester wrote during the run, kept separately so buildReport can
+   hoist them to the top as well as leaving them inline in the transcript. */
+const noteLog = [];
+
+function addNote(text) {
+  text = (text || "").trim();
+  if (!text) return false;
+  const where = encounter < ENCOUNTERS.length
+    ? `encounter ${encounter + 1}` : `endless wave ${encounter - ENCOUNTERS.length + 1}`;
+  noteLog.push(`[${where}, turn ${stats.turns + 1}] ${text}`);
+  log(`### NOTE: ${text}`, "note");
+  return true;
+}
+
 function log(text, cls) {
   fullLog.push(`[e${encounter + 1} t${stats.turns + 1}] ${text}`);
   const el = document.getElementById("log");
@@ -1548,10 +1583,14 @@ function applyEffect(effect, value, tag, color) {
       addTurnTotal(color, value);
     }
   } else if (effect === "sharpen") {
+    // Banking effects pay no damage/block, so they used to leave the colour's
+    // running total at 0 for the turn -- indistinguishable from an inert
+    // colour. Count the stack itself instead.
     // Banks a stack rather than paying out anything itself -- see the
     // sharpen consumption check at the top of this function.
     if (player.sharpenStacks < SHARPEN_MAX_STACKS) {
       player.sharpenStacks++;
+      addTurnTotal(color, 1);
       const pct = Math.round(SHARPEN_PCT_PER_STACK * 100);
       log(`${tag}: sharpen stack (${player.sharpenStacks}/${SHARPEN_MAX_STACKS}) — next hit +${player.sharpenStacks * pct}%`, "good");
     } else {
@@ -1571,6 +1610,7 @@ function applyEffect(effect, value, tag, color) {
     // focus discount applied in cast().
     if (player.focusStacks < FOCUS_MAX_STACKS) {
       player.focusStacks++;
+      addTurnTotal(color, 1);
       const pct = Math.round(FOCUS_PCT_PER_STACK * 100);
       log(`${tag}: focus stack (${player.focusStacks}/${FOCUS_MAX_STACKS}) — next cast -${player.focusStacks * pct}% cost`, "good");
     } else {
@@ -2751,6 +2791,22 @@ function buildReport() {
   L.push(new Date().toISOString());
   L.push(`version        ${GAME_VERSION}`);
   L.push("");
+  /* Tester notes go FIRST. They are the only part of this file a person wrote
+     on purpose, and the thing most likely to say what actually needs looking
+     at -- burying them under the statistics gets them skipped. */
+  const comment = (document.getElementById("testerComment") || {}).value || "";
+  if (comment.trim() || noteLog.length) {
+    L.push("=================== TESTER NOTES ===================");
+    if (comment.trim())
+      comment.trim().split("\n").forEach(line => L.push("  " + line));
+    if (noteLog.length) {
+      if (comment.trim()) L.push("");
+      L.push("  notes written during the run:");
+      noteLog.forEach(n => L.push("    " + n));
+    }
+    L.push("====================================================");
+    L.push("");
+  }
   L.push(`loadout        ${loadout.name} (${loadout.hp} hp)`);
   L.push(`colours        ${COLORS.map(c => c + "=" + (effectLabel(loadout, c) || "inert")).join("  ")}`);
   L.push(`triggers       ${Object.entries(loadout.shapes).map(([s, t]) => s + " -> " + t).join("  ")}`);
@@ -3297,6 +3353,10 @@ function render(fresh) {
   if (player.deathmarkActive) buffs.push("DEATHMARK ACTIVE -- CLEAR THE FIELD OR DIE");
   if (player.gambleNextLine3) buffs.push("NEXT 3-MATCH IS A GAMBLE");
   if (player.sharpenStacks) buffs.push(`SHARPEN ${player.sharpenStacks}/${SHARPEN_MAX_STACKS} (+${player.sharpenStacks * Math.round(SHARPEN_PCT_PER_STACK * 100)}% next hit)`);
+  // Focus was the one banking mechanic with no buff readout at all -- a
+  // tester matched yellow into it and could not tell it was doing anything
+  // (2026-08-02). Every other banked resource is listed here.
+  if (player.focusStacks) buffs.push(`FOCUS ${player.focusStacks}/${FOCUS_MAX_STACKS} (-${player.focusStacks * Math.round(FOCUS_PCT_PER_STACK * 100)}% next cast)`);
   q("buffs").innerHTML = buffs.map(b => `<div class="buff">${b}</div>`).join("");
 
   q("spells").innerHTML = availableSpells().map(n => {
@@ -3429,6 +3489,12 @@ function begin(picksArg, setKeys) {
     const b = document.getElementById(id);
     b.onclick = () => copyLog(b);
   }
+  const noteInput = document.getElementById("noteInput");
+  const submitNote = () => { if (addNote(noteInput.value)) noteInput.value = ""; };
+  document.getElementById("noteBtn").onclick = submitNote;
+  noteInput.addEventListener("keydown", ev => {
+    if (ev.key === "Enter") { ev.preventDefault(); submitNote(); }
+  });
   document.getElementById("subBtn").onclick = () =>
     submitLog(document.getElementById("subBtn"), document.getElementById("testerName"));
   startEncounter();
