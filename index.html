@@ -2989,11 +2989,14 @@ async function attemptSwap(r1, c1, r2, c2) {
     if (doubled) log("(swipe was DOUBLED)", "good");
     if (repeat > 1) log(`(triggers fired x${repeat})`, "good");
 
-    if (!fusing && chain === 1) {
-      // Tactician's Regalia: a swipe that didn't cascade at all is
-      // rewarded instead of wasted -- capped per turn on each half. 2pc
-      // and 4pc are independent flags now, so either can be active on its
-      // own (mixed with a different set's 2pc).
+    /* Tactician's Regalia: a swipe that didn't cascade at all is rewarded
+       instead of wasted -- capped per turn on each half. 2pc and 4pc are
+       independent flags, so either can be active on its own.
+
+       A FUSION COUNTS TOO (designer ruling 2026-08-02), but its no-cascade
+       threshold is 0, not 1: a fusion's own detonation is its resolution, so
+       resolveBoard() afterwards only counts the FOLLOW-UP cascade. */
+    if (chain === (fusing ? 0 : 1)) {
       if (loadout.tactician2pc && player.tactician2pcUsedThisTurn < TACTICIAN_2PC_MAX_PER_TURN) {
         player.tactician2pcUsedThisTurn++;
         const rr = rnd(SIZE), rc = rnd(SIZE);
