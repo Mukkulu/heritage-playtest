@@ -614,7 +614,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03";
+const GAME_VERSION = "2026-08-03b";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -1085,17 +1085,26 @@ const BASE_HP = 50;
 // Note Yellow had to become "splash" for all three (was "attack" for two of
 // them) since attack is now red-exclusive -- see the GEM_POOLS comment.
 const PRESETS = {
+  /* Every preset fills EVERY socket it can, including the optional line5 and
+     ultimate ones -- leaving them empty meant a preset silently shipped with
+     two of its trigger slots doing nothing, which reads as "this build has no
+     line5 payoff" rather than "you forgot to pick one". Each pick is chosen to
+     match what the build already does; tweak freely after. */
   warden: {
     name: "Warden",
-    // No mana socket, so no spellbook -- `spells: []` is the honest default,
-    // not an oversight. Swap a socket to mana and the picker appears.
+    // No mana or focus socket, so no spellbook -- `spells: []` is the honest
+    // default, not an oversight. Swap a socket and the picker appears.
     picks: { R: "attack", G: "block", Y: "splash", B: "armour", line4: "cleave",
-             hardL: "stun", hardT: "dodge", spells: [] },
+             hardL: "stun", hardT: "dodge",
+             // damage_negate: the defensive line5, matching block + armour
+             line5: "damage_negate", ultimate: "deathmark", spells: [] },
   },
   bleeder: {
     name: "Bleeder",
     picks: { R: "bleed", G: "block", Y: "splash", B: "lifesteal", line4: "bleed_burst",
-             hardL: "bleed_spike", hardT: "bleed_detonate", spells: [] },
+             hardL: "bleed_spike", hardT: "bleed_detonate",
+             // phantom_blade doubles Red/Yellow payouts -- i.e. bleed and splash
+             line5: "phantom_blade", ultimate: "deathmark", spells: [] },
   },
   stormcaller: {
     name: "Stormcaller",
@@ -1104,6 +1113,9 @@ const PRESETS = {
     // group DoT.
     picks: { R: "mana", G: "block", Y: "splash", B: "mana", line4: "spell_buff",
              hardL: "free_spell", hardT: "double_next_spell",
+             // swipe_multiplier fires this build's spell triggers 5x -- every
+             // one of its three sockets empowers a cast
+             line5: "swipe_multiplier", ultimate: "deathmark",
              spells: ["fire", "heal", "amplify", "acid"] },
   },
 };
@@ -3723,7 +3735,8 @@ function setCardHtml(k, s) {
 function presetCardHtml(k, p) {
   return `<div class="card" data-preset="${k}">
     <h3>${p.name}</h3>
-    <p>Fills all 6 sockets to match the old ${p.name} build -- tweak freely after.</p>
+    <p>Fills every socket -- colours, all four chain gems and the ultimate --
+    to match the ${p.name} build. Tweak freely after.</p>
   </div>`;
 }
 
