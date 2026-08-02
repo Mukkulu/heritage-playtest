@@ -432,6 +432,10 @@
     text-transform: uppercase; color: var(--dim); font-weight: 700;
   }
   .focusbox .askfor { font-size: 12.5px; color: var(--dim); margin: 4px 0 0; }
+  .focusbox .setupbtn {
+    font-size: 11.5px; padding: 3px 9px; margin-left: 4px; white-space: nowrap;
+    border-radius: 6px; vertical-align: baseline;
+  }
 
   .logbtns { display: flex; gap: 8px; margin-top: 10px; }
   .logbtns button { flex: 1; font-size: 13px; padding: 6px; }
@@ -610,7 +614,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-02e";
+const GAME_VERSION = "2026-08-03";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -623,6 +627,17 @@ const GAME_VERSION = "2026-08-02e";
      updated : shown next to the heading, so a tester can tell if it is stale
      intro   : one or two sentences of framing (optional, "" to hide)
      runs    : the specific builds worth playing. `build` is bolded.
+               Optionally give a run a `setup` and it gets a "Set this up"
+               button that fills the picker in for the tester:
+                 setup: {
+                   preset: "warden",          // start from a preset (optional)
+                   picks:  { Y: "focus" },    // merged on top (optional)
+                   sets:   ["rose", null],    // tier-piece slots (optional)
+                   spells: ["freeze"],        // as much of the book as matters
+                 }
+               Leave `spells` short when the rest is the tester's choice --
+               the Begin button then tells them how many more to pick, which
+               is the behaviour you want for "anything with Freeze Blast".
      themes  : questions that apply to any run
      askfor  : closing line about how to send findings back
 
@@ -637,21 +652,30 @@ const TESTING_FOCUS = {
   runs: [
     { build: "Warden preset, unchanged",
       why: "the baseline everything else is measured against. Does damage-per-turn still "
-         + "land around 110–170, now that execute, sharpen, void and poison gems exist?" },
+         + "land around 110–170, now that execute, sharpen, void and poison gems exist?",
+      setup: { preset: "warden" } },
     { build: "Stormcaller preset, unchanged",
       why: "how much mana a caster really earns in a fight, and how much you can bank "
-         + "before spending it. Every spell price rests on this." },
+         + "before spending it. Every spell price rests on this.",
+      setup: { preset: "stormcaller" } },
     { build: "anything with Freeze Blast — get to the dragon",
       why: "Freeze ignores the dragon's resolve, so it is the one stun it cannot shrug "
-         + "off. One question by feel: did BREATH ever actually fire?" },
+         + "off. One question by feel: did BREATH ever actually fire?",
+      // only freeze is prescribed; the other three slots are yours
+      setup: { preset: "stormcaller", spells: ["freeze"] } },
     { build: "a caster with Ethereal Defence — go deep into endless",
       why: "it just got a lot cheaper. Do you ever stack it more than two or three? Does "
-         + "it trivialise the late waves?" },
+         + "it trivialise the late waves?",
+      setup: { preset: "stormcaller", spells: ["ethereal"] } },
     { build: "a one-mana hybrid, e.g. red attack + blue mana",
-      why: "the least-tested shape. Are two spells worth spending a colour on?" },
+      why: "the least-tested shape. Are two spells worth spending a colour on?",
+      setup: { preset: "warden",
+               picks: { R: "attack", B: "mana", Y: "splash", G: "block" },
+               spells: [] } },
     { build: "anything using execute, sharpen or focus",
       why: "the three newest colour effects. Any of them obviously dead, or obviously "
-         + "mandatory?" },
+         + "mandatory?",
+      setup: { preset: "warden", picks: { R: "execute", Y: "sharpen", B: "focus" } } },
   ],
   themes: [
     "Did you ever have a <b>big casting turn</b> — several spells at once off a banked pool? "
@@ -3900,8 +3924,10 @@ document.getElementById("advancedToggle").onchange = e => {
     F.updated ? `<span class="upd">— updated ${F.updated}</span>` : "";
   let h = F.intro ? `<p class="intro">${F.intro}</p>` : "";
   if (F.runs.length) {
-    h += `<h4>Runs worth doing</h4><ol>` + F.runs.map(r =>
-      `<li><b>${r.build}</b> — ${r.why}</li>`).join("") + `</ol>`;
+    h += `<h4>Runs worth doing</h4><ol>` + F.runs.map((r, i) =>
+      `<li><b>${r.build}</b> — ${r.why}`
+      + (r.setup ? ` <button class="setupbtn" data-run="${i}">Set this up</button>` : "")
+      + `</li>`).join("") + `</ol>`;
   }
   if (F.themes.length) {
     h += `<h4>Whatever you play, I'd like to know</h4><ul>` +
@@ -3909,6 +3935,37 @@ document.getElementById("advancedToggle").onchange = e => {
   }
   if (F.askfor) h += `<p class="askfor">${F.askfor}</p>`;
   document.getElementById("focusBody").innerHTML = h;
+
+  /* "Set this up" fills the picker in from a run's `setup`. It drives the
+     same `picks` / `pickedSet1..2` state the cards do and then calls
+     refreshSetupSelection(), so everything downstream -- the spellbook's
+     slot count, the preview, the Begin button -- recomputes exactly as if
+     the tester had clicked it all themselves. Nothing is bypassed.
+
+     A setup that names FEWER spells than the build earns is deliberate: the
+     brief prescribes only what it cares about, and the Begin button then
+     reads "Choose 2 more spell(s) to begin", which is the instruction we
+     want for "anything with Freeze Blast". */
+  document.querySelectorAll("#focusBody .setupbtn").forEach(btn => {
+    btn.onclick = () => {
+      const setup = F.runs[+btn.dataset.run].setup;
+      const base = setup.preset ? PRESETS[setup.preset].picks : {};
+      picks = Object.assign({}, base, setup.picks || {},
+                            { spells: (setup.spells || base.spells || []).slice() });
+      const [s1, s2] = setup.sets || [];
+      pickedSet1 = s1 || null;
+      pickedSet2 = s2 || null;
+      // Show the sockets, or a tester cannot see what was just chosen for them.
+      const adv = document.getElementById("advancedToggle");
+      adv.checked = true;
+      document.getElementById("advancedSection").classList.remove("hidden");
+      refreshSetupSelection();
+      btn.textContent = "Set up ✓";
+      setTimeout(() => { btn.textContent = "Set this up"; }, 1600);
+      document.getElementById("beginBtn").scrollIntoView(
+        { behavior: "smooth", block: "center" });
+    };
+  });
 })();
 
 document.getElementById("beginBtn").onclick = () => {
