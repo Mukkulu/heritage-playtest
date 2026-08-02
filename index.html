@@ -189,10 +189,15 @@
   @media (max-width: 860px) {
     .game { display: flex; flex-direction: column; gap: 12px; }
     .side { display: contents; }
+    /* Enemies, your mana and your spells must be readable WITHOUT scrolling:
+       deciding when and what to cast needs all three at once, and with the
+       spell panel below the board it was impossible (tester report,
+       2026-08-02). The board moves below them -- you look at the board to
+       act, but you look at these to decide. */
     #enemies    { order: 1; }
     .statpanel  { order: 2; }
-    .boardwrap  { order: 3; }
-    #spellPanel { order: 4; }
+    #spellPanel { order: 3; }
+    .boardwrap  { order: 4; }
     .endpanel   { order: 5; }
     .logpanel   { order: 6; }
 
@@ -214,6 +219,17 @@
                  grid-template-columns: 1fr 1fr; align-items: center; }
     .statpanel .stat { font-size: 13px; }
     .statpanel #buffs { grid-column: 1 / -1; }
+
+    /* Compact spell buttons -- they now sit above the board, so every pixel
+       they take is a pixel of board pushed off-screen. */
+    #spellPanel { padding: 8px; }
+    .spells { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 6px;
+              margin-bottom: 0; }
+    .spells button { padding: 6px 3px; font-size: 12px; line-height: 1.25; }
+    .spells small { font-size: 10.5px; }
+    /* the third line of a spell button is its rules text -- useful on desktop,
+       noise on a phone where the label and cost are what you act on */
+    .spells small:nth-of-type(2) { display: none; }
 
     .boardwrap { padding: 8px; }
     /* Keep the whole board thumb-reachable AND visible alongside the
@@ -324,6 +340,17 @@
   .bar { height: 6px; border-radius: 4px; background: var(--panel2); overflow: hidden; margin: 4px 0 10px; }
   .bar > i { display: block; height: 100%; background: var(--G); transition: width .25s; }
   .bar.mana > i { background: var(--B); }
+  /* Mana is uncapped, so a plain proportional bar pins at full exactly when
+     you have the most and most need to read it. Notches every MANA_NOTCH mana
+     turn it into something countable at a glance, and the scale steps up in
+     whole notch-rows so a notch is always the same amount. */
+  .bar.mana { position: relative; height: 9px; }
+  .bar.mana::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(to right,
+      transparent 0, transparent calc(var(--notch, 33.33%) - 2px),
+      var(--panel) calc(var(--notch, 33.33%) - 2px), var(--panel) var(--notch, 33.33%));
+  }
   .buff {
     margin: 8px 0; padding: 6px 10px; border-radius: 6px; font-size: 12.5px; font-weight: 700;
     background: rgba(223,177,58,.14); border: 1px solid rgba(223,177,58,.5); color: #f0cf78;
@@ -542,7 +569,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-02";
+const GAME_VERSION = "2026-08-02b";
 
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
@@ -623,6 +650,16 @@ const SEEDED_GEMS = new Set(["X"]); // X = void (Void's Gift)
 const VOID_STRENGTH = 2.0;        // void gem match: pays this many times a normal attack hit
 const VOID_SELFHIT_FRAC = 0.05;   // ...and this fraction of that also hits the player
 const POISON_PCT_MAX_HP = 0.08;   // poison special gem detonation: this fraction of target's max hp
+
+/* Mana bar readability. A notch every MANA_NOTCH, with the scale growing in
+   whole rows of MANA_NOTCH_ROW so a notch is always worth the same amount.
+   The scale STOPS growing at MANA_SCALE_MAX: past that the notches get too
+   fine to count (18 hairlines at 900 mana), and the decision the bar exists
+   to support -- "can I afford this cast?" -- is already answered, because you
+   can afford anything. The exact number stays in the text either way. */
+const MANA_NOTCH = 50;
+const MANA_NOTCH_ROW = 150;    // 3 notches per row
+const MANA_SCALE_MAX = 300;    // 6 notches, the most that stays countable
 
 const FREEZE_STACKS_THRESHOLD = 3;   // status effect: 3 stacks -> 1 stun
 
@@ -3322,8 +3359,17 @@ function render(fresh) {
   const q = id => document.getElementById(id);
   q("hpTxt").textContent = `${Math.max(0, player.hp)} / ${player.maxHp}`;
   q("hpBar").style.width = Math.max(0, (player.hp / player.maxHp) * 100) + "%";
-  q("manaTxt").textContent = player.mana;
-  q("manaBar").style.width = Math.min(100, (player.mana / 150) * 100) + "%";
+  /* One notch per MANA_NOTCH. The bar's scale grows in whole rows of
+     MANA_NOTCH_ROW so the notches never resize under you -- a notch is always
+     the same amount of mana, you just get more of them. */
+  const manaScale = Math.min(MANA_SCALE_MAX, Math.max(MANA_NOTCH_ROW,
+    Math.ceil((player.mana + 1) / MANA_NOTCH_ROW) * MANA_NOTCH_ROW));
+  const notches = Math.floor(player.mana / MANA_NOTCH);
+  q("manaTxt").textContent = notches
+    ? `${player.mana}  (${notches} x ${MANA_NOTCH})` : String(player.mana);
+  q("manaBar").style.width =
+    Math.min(100, (player.mana / manaScale) * 100) + "%";
+  q("manaBarRow").style.setProperty("--notch", (MANA_NOTCH / manaScale) * 100 + "%");
   q("blockTxt").textContent = player.block
     + (player.armour ? `  +${player.armour} armour` : "")
     + (player.shield ? `  +${player.shield} shield` : "");
