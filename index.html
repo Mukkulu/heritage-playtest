@@ -584,7 +584,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-02c";
+const GAME_VERSION = "2026-08-02d";
 
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
@@ -1553,6 +1553,26 @@ function incomingDamage(raw) {
   return { dmg: Math.round(raw * (1 - cut)), cut };
 }
 
+/* Mana is granted from three places -- a mana colour, the restore_mana
+   triggers, and Bloodgod's bleed-to-mana -- and only the first was counted.
+   The log therefore under-reported income, and could print the impossible
+   "mana spent 135% of what you earned" (seen in a real submission). That
+   matters more since focus started earning spellbook slots: a focus build's
+   whole income can arrive through the two uncounted channels, so the log
+   would have shown ~0 earned while the player cast freely.
+
+   ANY new source of mana must go through here, exactly like dealDamage. */
+function gainMana(amount, color) {
+  if (!amount) return 0;
+  player.mana += amount;
+  stats.manaGained += amount;
+  stats.manaPeak = Math.max(stats.manaPeak, player.mana);
+  const rec = stats.encounters[encounter];
+  if (rec) rec.peak = Math.max(rec.peak || 0, player.mana);
+  if (color) addTurnTotal(color, amount);
+  return amount;
+}
+
 function applyEffect(effect, value, tag, color) {
   // Razor's End 4pc: the more of your OWN health is missing, the harder
   // every damage-dealing effect hits -- scales up to RAZORS_END_DEATH_MULT_CAP
@@ -1627,11 +1647,8 @@ function applyEffect(effect, value, tag, color) {
     else log(`${tag}: +${healed} health`, "good");
     addTurnTotal(color, healed + totalShield);
   } else if (effect === "mana") {
-    player.mana += value; stats.manaGained += value;
-    stats.manaPeak = Math.max(stats.manaPeak, player.mana);
-    { const rec = stats.encounters[encounter]; if (rec) rec.peak = Math.max(rec.peak || 0, player.mana); }
+    gainMana(value, color);
     log(`${tag}: +${value} mana`, "good");
-    addTurnTotal(color, value);
   } else if (effect === "splash") {
     const others = living().filter(e => e !== t);
     if (others.length) {
@@ -1977,7 +1994,7 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     }
   } else if (trigger === "restore_mana_minor" || trigger === "restore_mana_major") {
     const amount = trigger === "restore_mana_minor" ? MINOR_MANA_RESTORE : MAJOR_MANA_RESTORE;
-    player.mana += amount;
+    gainMana(amount);
     log(`>> ${tag} TRIGGER: +${amount} mana`, "good");
   } else if (trigger === "restore_health_minor" || trigger === "restore_health_major") {
     const amount = trigger === "restore_health_minor" ? MINOR_HEAL_RESTORE : MAJOR_HEAL_RESTORE;
@@ -2620,7 +2637,7 @@ async function endTurn() {
       const bl = dealDamage(e, e.bleed); log(`${e.name} bleeds for ${bl}`, "good");
       if (loadout.bleedGrantsMana) {
         const gained = e.bleed * BLOODGOD_MANA_PER_BLEED_DMG;
-        player.mana += gained;
+        gainMana(gained);
         log(`the bloodgod grants +${gained} mana`, "good");
       }
     }
