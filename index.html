@@ -2957,28 +2957,39 @@ async function attemptSwap(r1, c1, r2, c2) {
   render(true);
   await sleep(120);
 
-  if (special[r1][c1] && special[r2][c2]) {
-    swipes--;
-    doFuse(r1, c1, r2, c2);
-    render(true);
-    await sleep(160);
-    await resolveBoard();
-  } else if (!findMatches(board).length) {
+  const fusing = !!(special[r1][c1] && special[r2][c2]);
+  if (!fusing && !findMatches(board).length) {
     swapCells(r1, c1, r2, c2);           // snaps back, costs nothing
     render(true);
   } else {
     swipes--;
+    /* A FUSION IS A SWIPE. Both banked swipe multipliers -- "double next
+       swipe" and "next swipe's triggers fire 5x" -- therefore apply to a
+       fusion too, and are consumed by it. Arming them used to sit inside the
+       ordinary-match branch only, so swiping two chain gems together silently
+       got neither AND left both still banked (designer-reported, 2026-08-02).
+       A snap-back still consumes nothing, because it is not a swipe at all. */
     const doubled = player.doubleNextSwipe;
     if (doubled) { valueMult = 2; player.doubleNextSwipe = false; }
     const repeat = player.nextSwipeTriggerMult;
     if (repeat > 1) { triggerRepeat = repeat; player.nextSwipeTriggerMult = 1; }
-    const chain = await resolveBoard();
+
+    let chain;
+    if (fusing) {
+      doFuse(r1, c1, r2, c2);
+      render(true);
+      await sleep(160);
+      chain = await resolveBoard();
+    } else {
+      chain = await resolveBoard();
+    }
+
     valueMult = 1;
     triggerRepeat = 1;
     if (doubled) log("(swipe was DOUBLED)", "good");
     if (repeat > 1) log(`(triggers fired x${repeat})`, "good");
 
-    if (chain === 1) {
+    if (!fusing && chain === 1) {
       // Tactician's Regalia: a swipe that didn't cascade at all is
       // rewarded instead of wasted -- capped per turn on each half. 2pc
       // and 4pc are independent flags now, so either can be active on its
