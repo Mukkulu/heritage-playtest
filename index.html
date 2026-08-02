@@ -220,6 +220,21 @@
     .statpanel .stat { font-size: 13px; }
     .statpanel #buffs { grid-column: 1 / -1; }
 
+    /* The gem legend was a 2x2 grid of tall boxes taking roughly a fifth of
+       the screen. With the spell panel now also above the board there is no
+       room for that, so in portrait it collapses to one row of four compact
+       chips: the live per-colour total and what the colour does, which is
+       what you actually read mid-turn. The 3/4/5 payout preview and the
+       explanatory note are desktop-only. */
+    .gemrow { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px;
+              margin-bottom: 8px; }
+    .gembox { padding: 4px 5px; }
+    .gembox .rates, .gemnote { display: none; }
+    .gembox .top { font-size: 10.5px; gap: 3px; line-height: 1.15; }
+    .gembox .g { font-size: 12px; }
+    .turn-total { font-size: 15px; margin-bottom: 2px; }
+    .combobox { display: none; }   /* its tooltip needs hover; useless on touch */
+
     /* Compact spell buttons -- they now sit above the board, so every pixel
        they take is a pixel of board pushed off-screen. */
     #spellPanel { padding: 8px; }
@@ -477,7 +492,7 @@
       <h3 class="section-h">Spellbook <span id="spellSlotHint" class="hint"></span></h3>
       <div class="cards mini" id="spellCards"></div>
     </div>
-    <div class="hint" id="spellLocked">No mana socket, so no spells — bind a colour to mana to earn a spellbook.</div>
+    <div class="hint" id="spellLocked">No mana or focus socket, so no spells — bind a colour to either to earn a spellbook.</div>
 
     <div class="hint" id="setupPreview"></div>
 
@@ -569,7 +584,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-02b";
+const GAME_VERSION = "2026-08-02c";
 
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
@@ -1128,15 +1143,24 @@ function spellPool(setKeys) {
   return pool || Object.keys(SPELLS);
 }
 
-/* How many spells this build may know. Two per mana colour.
+/* How many spells this build may know. Two per colour that EARNS a spellbook.
+   Mana earns one because it fuels casting; focus earns one at the same rate
+   (designer ruling 2026-08-02) because it exists only to serve casting -- a
+   build that spends yellow or blue on focus is committing to being a caster
+   just as much as one spending it on mana, and previously got nothing for it.
+   A focus colour still produces no mana, so it widens the book without
+   filling the pool.
+
    ASSUMPTION, flagged: a set that casts for free (Archmage's wild charge
-   costs no mana) would be completely inert on a mana-less build, so it is
-   granted one slot pair on its own. Delete the wildChargeColor branch to
-   make it strictly mana-gated like everything else. */
+   costs no mana) would be completely inert on a build with neither, so it is
+   granted one slot pair on its own. Delete the wildChargeColor branch to make
+   it strictly socket-gated like everything else. */
+const SPELLBOOK_COLOURS = ["mana", "focus"];
+
 function spellSlotsFor(picks, setKeys) {
   const colors = finalColors(picks, setKeys);
-  const mana = COLORS.filter(c => colors[c] === "mana").length;
-  if (mana) return mana * SPELL_SLOTS_PER_MANA_COLOUR;
+  const earning = COLORS.filter(c => SPELLBOOK_COLOURS.includes(colors[c])).length;
+  if (earning) return earning * SPELL_SLOTS_PER_MANA_COLOUR;
   const [k1, k2] = normalizeSetKeys(setKeys);
   for (const k of [k1, k2]) {
     if (!k) continue;
