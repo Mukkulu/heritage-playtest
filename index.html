@@ -705,7 +705,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03h";
+const GAME_VERSION = "2026-08-03i";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -3386,6 +3386,12 @@ async function attemptSwap(r1, c1, r2, c2) {
     let chain;
     if (fusing) {
       doFuse(r1, c1, r2, c2);
+      /* doFuse collapses the board itself, OUTSIDE resolveBoard's loop, so
+         that one refill escaped the tutorial's cascade suppression and could
+         set off a second match. Intermittent -- it only showed when the random
+         refill happened to line three up, which is why it survived several
+         green runs before the check caught it. */
+      if (tutorialStep >= 0) quietenBoard();
       render(true);
       await sleep(160);
       chain = await resolveBoard();
