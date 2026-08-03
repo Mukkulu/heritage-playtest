@@ -697,7 +697,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03d";
+const GAME_VERSION = "2026-08-03e";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -1391,7 +1391,16 @@ function buildLoadout(picks, setKeys) {
 
   const colors = {};
   for (const col of COLORS) colors[col] = picks[col];
-  const shapes = { line4: picks.line4, L: picks.hardL, T: picks.hardT };
+  /* Only write a socket that was actually picked. This used to set line4/L/T
+     unconditionally, so a build with any of them unfilled carried a key with
+     an `undefined` value -- and the shape legend then tried to render a
+     trigger that was not there and threw. combat.py always filtered these, so
+     this was a live divergence between the engines that the parity harness
+     could not see, because it only ever passes complete picks. */
+  const shapes = {};
+  if (picks.line4) shapes.line4 = picks.line4;
+  if (picks.hardL) shapes.L = picks.hardL;
+  if (picks.hardT) shapes.T = picks.hardT;
   if (picks.line5) shapes.line5 = picks.line5;
   if (picks.ultimate) shapes.ultimate = picks.ultimate;
   const loadout = { hp: BASE_HP, spellCost: 1, colors, shapes };
@@ -2608,10 +2617,19 @@ async function resolveBoard() {
 
     // 3. REFILL.
     collapse(cells);
+    // The tutorial refills into an INERT pattern instead of random colours.
+    // Random refill cascades, and a cascade turns "I made an L" into a chain of
+    // unrelated matches ending in a line5 -- which is exactly what a tester
+    // reported seeing instead of the shape they had just been taught.
+    if (tutorialStep >= 0) quietenBoard();
     render(true);
     await sleep(pace * 0.45);
   }
-  if (!hasMove(board)) { reshuffle(); log("no moves left -- board reshuffled"); render(true); }
+  // The tutorial's board is deliberately dead except for the one taught move,
+  // so hasMove() is false by design and reshuffling would destroy the lesson.
+  if (tutorialStep < 0 && !hasMove(board)) {
+    reshuffle(); log("no moves left -- board reshuffled"); render(true);
+  }
   if (loadout.cascadeBonus) fireCascadeBonus(totalMatches, totalGems, firstMatchGems || 0);
   checkAceOfClubs();
   return chain;
@@ -3779,51 +3797,142 @@ function startEncounter() {
    until the last step, so the fight never presses on you while you are still
    learning to see the board. */
 
-/* Builds a board from a template: one string per row, a colour letter for a
-   cell the lesson needs and "." for filler.
+/* ---- tutorial boards ----
+   Every lesson board is built so that THE ONLY LEGAL MOVE IS THE ONE BEING
+   TAUGHT. A tester found the tutorial unclear because whatever they tried
+   cascaded into something else, so the shape they had just made was never the
+   shape they saw go off.
 
-   Filler is chosen greedily and then the whole board is REPAIRED until
-   findMatches() comes back empty, recolouring only filler cells. The greedy
-   pass alone is not enough -- it only sees the cells already decided to its
-   left and above, so a pair of fixed cells to its right can still complete a
-   run through it. Checking the real matcher afterwards is the only thing that
-   actually guarantees a clean board, and a clean board is the whole point:
-   a lesson that resolves itself before the player touches it teaches nothing. */
+   That rests on an inert base: with colours laid out as (r + 2c) % 4, no three
+   ever line up, and -- verified by brute force over all 112 adjacent swaps --
+   NO swap can create a match either. So the base contributes zero moves, and
+   whatever the lesson paints on top is the only thing a player can do. */
+/* The background uses only THREE colours, laid out diagonally as (r + c) % 3,
+   and never uses red. Brute-forced over all 112 adjacent swaps: no match at
+   rest, and no swap can create one -- so the background contributes zero legal
+   moves. Reserving red for lesson gems then means EVERY possible match must
+   involve a gem the lesson placed, which is what makes "the only move is the
+   one being taught" something the board guarantees rather than something a
+   solver has to chase.
+
+   Three backgrounds were tried and rejected first, each by measurement rather
+   than argument: a four-colour stripe supplied reds of its own that collided
+   with the lesson; a two-colour checkerboard is far worse than it looks, since
+   swapping VERTICALLY in one puts a colour beside its two horizontal twins
+   (77+ moves); and a four-colour 2x2 block was move-free but still shared its
+   palette with the lesson, leaving five stray moves per board. */
+const INERT_PALETTE = ["G", "Y", "B"];   // red is the lesson's alone
+function inertColour(r, c) { return INERT_PALETTE[(r + c) % 3]; }
+
+/* Repaints every cell that isn't part of a match-free board back toward the
+   inert pattern until findMatches() is empty. Used after each collapse so the
+   tutorial never cascades. Specials keep their colour -- a blast pays out its
+   own colour, so changing it under the player would be a lie. */
+function quietenBoard() {
+  let guard = 0;
+  while (findMatches(board).length && guard++ < 300) {
+    const m = findMatches(board)[0];
+    let moved = false;
+    for (const [r, c] of m.cells) {
+      if (special[r][c]) continue;                 // never repaint a chain gem
+      const want = COLORS.filter(x => x !== board[r][c]);
+      board[r][c] = want[guard % want.length];
+      moved = true;
+      break;
+    }
+    if (!moved) break;
+  }
+}
+
+/* Builds a lesson board from a template: one string per row, a colour letter
+   for a cell the lesson needs, "." for inert filler. Returns the board and the
+   set of cells the lesson owns, which restrictToMove() must not touch. */
 function layout(rows) {
   const fixed = new Set();
-  const b = Array.from({ length: SIZE }, () => new Array(SIZE).fill(null));
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
+  const b = Array.from({ length: SIZE }, (_, r) =>
+    Array.from({ length: SIZE }, (_, c) => {
       const ch = (rows[r] || "")[c];
-      if (ch && ch !== ".") { b[r][c] = ch; fixed.add(key(r, c)); }
-    }
-  }
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
-      if (b[r][c]) continue;
-      b[r][c] = COLORS.find(col =>
-        !(c >= 2 && b[r][c - 1] === col && b[r][c - 2] === col) &&
-        !(r >= 2 && b[r - 1][c] === col && b[r - 2][c] === col)) || COLORS[0];
-    }
-  }
-  let guard = 0;
-  for (;;) {
-    const ms = findMatches(b);
-    if (!ms.length || guard++ > 400) break;
-    let changed = false;
-    for (const m of ms) {
-      for (const [r, c] of m.cells) {
-        if (fixed.has(key(r, c))) continue;
-        const alt = COLORS.filter(x => x !== b[r][c]);
-        b[r][c] = alt[guard % alt.length];
-        changed = true;
-        break;
-      }
-      if (changed) break;
-    }
-    if (!changed) break;   // every offending cell is load-bearing; give up
-  }
+      if (ch && ch !== ".") { fixed.add(key(r, c)); return ch; }
+      return inertColour(r, c);
+    }));
+  b.fixedCells = fixed;
   return b;
+}
+
+// Every adjacent swap that would produce a match or a fusion, as "r,c,r2,c2".
+function legalMoveKeys() {
+  const out = [];
+  for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++)
+    for (const [dr, dc] of [[0, 1], [1, 0]]) {
+      const r2 = r + dr, c2 = c + dc;
+      if (r2 >= SIZE || c2 >= SIZE) continue;
+      if (special[r][c] && special[r2][c2]) { out.push(`${r},${c},${r2},${c2}`); continue; }
+      swapCells(r, c, r2, c2);
+      const hit = findMatches(board).length > 0;
+      swapCells(r, c, r2, c2);
+      if (hit) out.push(`${r},${c},${r2},${c2}`);
+    }
+  return out;
+}
+
+/* Repaints FILLER cells until the board has no match at rest and the ONLY
+   legal move is `intended` (or none, if intended is null).
+
+   Painting a lesson over an inert background is not enough on its own: the
+   background supplies colours too, and they collide. The very first lesson
+   put two reds beside a red the background had already placed, which made a
+   match before the player touched anything. Only checking against the real
+   matcher catches that, so that is what this does. */
+function restrictToMove(intended) {
+  const fixed = board.fixedCells || new Set();
+  const isFiller = (r, c) => !fixed.has(key(r, c)) && !special[r][c];
+  const recolour = (r, c) => {
+    const alts = COLORS.filter(x => x !== board[r][c]);
+    for (const alt of alts) {
+      const was = board[r][c];
+      board[r][c] = alt;
+      if (!findMatches(board).length) return true;
+      board[r][c] = was;
+    }
+    board[r][c] = alts[0];
+    return true;
+  };
+
+  // With a checkerboard background this should need zero passes -- it is kept
+  // as a guard so a future edit to a template fails safe rather than silently
+  // giving the player a second thing to click.
+  for (let guard = 0; guard < 40; guard++) {
+    const ms = findMatches(board);
+    if (ms.length) {                       // a match at rest -- always wrong
+      const cell = ms[0].cells.find(([r, c]) => isFiller(r, c));
+      if (!cell) break;
+      recolour(cell[0], cell[1]);
+      continue;
+    }
+    const extra = legalMoveKeys().filter(k => k !== intended);
+    if (!extra.length) return true;
+    // Work through EVERY offending move this pass. Bailing out on the first
+    // one that resists leaves all the others in place, which is what happened
+    // when this stopped at a break -- boards still offered four to eight
+    // unintended moves.
+    let progress = false;
+    for (const move of extra) {
+      const [r, c, r2, c2] = move.split(",").map(Number);
+      const target = isFiller(r, c) ? [r, c] : (isFiller(r2, c2) ? [r2, c2] : null);
+      if (!target) continue;
+      const was = board[target[0]][target[1]];
+      for (const alt of COLORS.filter(x => x !== was)) {
+        board[target[0]][target[1]] = alt;
+        if (!findMatches(board).length && !legalMoveKeys().includes(move)) {
+          progress = true; break;
+        }
+        board[target[0]][target[1]] = was;
+      }
+      if (progress) break;
+    }
+    if (!progress) break;
+  }
+  return findMatches(board).length === 0;
 }
 
 let tutorialStep = -1;   // -1 = not in the tutorial
@@ -3833,91 +3942,163 @@ let tutorialMark = {};   // counters snapshotted when a step is armed
 const TUTORIAL = [
   {
     title: "Swap two gems to line up three",
-    text: "Drag one gem onto a neighbour — or tap one, then the other. Line up "
-        + "<b>three of the same colour</b> and they clear. Here, pull the red gem "
-        + "<b>down</b> into the row of reds.<br><span class='dim'>A swap that makes no "
-        + "match just snaps back. It costs you nothing, so experiment freely.</span>",
+    text: "Drag a gem onto a neighbour — or tap one, then the other. Line up "
+        + "<b>three of the same colour</b> and they clear.<br>"
+        + "<span class='dim'>Only one swap on this board does anything. A swap that "
+        + "makes no match just snaps back and costs you nothing.</span>",
     arm() {
-      //          0123456 7
       board = layout([
         "........", "........", "........",
-        "...R....",          // the red to pull down
-        ".RR.....",          // ...into these two
+        "...R....",
+        ".RR.....",
         "........", "........", "........",
       ]);
       special = emptySpecials();
+      restrictToMove("3,3,4,3");
     },
     done: () => (stats.shapes.line3 || 0) > (tutorialMark.line3 || 0),
-    cheer: "That's the whole basic move. Red is your <b>attack</b> colour in this "
-         + "build, so those three just hit the dummy.",
+    cheer: "Three is the smallest match, and it pays out immediately.",
   },
   {
-    title: "Now line up FOUR",
-    text: "Four in a row does something different: it <b>does not pay out</b>. It "
-        + "leaves a <b>chain gem</b> behind instead — the marked one. There's a "
-        + "gap in the red row; pull the red gem down to fill it and make four.",
+    title: "Four in a row makes a CHAIN GEM",
+    text: "Now fill the gap to make <b>four</b> in a row. Four does something "
+        + "different: it <b>pays out nothing</b>. It leaves a <b>chain gem</b> "
+        + "behind — marked <b>4</b> — holding that power until you spend it.",
     arm() {
-      // NOT three-in-a-row here -- that is already a match. Two, a gap, then a
-      // fourth, so filling the gap is what makes the run of four.
       board = layout([
         "........", "........", "........",
-        "...R....",          // pull this one down...
-        ".RR.R...",          // ...into the gap, making four
+        "...R....",
+        ".RR.R...",
         "........", "........", "........",
       ]);
       special = emptySpecials();
+      restrictToMove("3,3,4,3");
     },
     done: () => stats.specials > (tutorialMark.specials || 0),
-    cheer: "That gem is now stored power. It pays nothing until you set it off.",
+    cheer: "That <b>4</b> is stored power. It does nothing sitting there.",
   },
   {
-    title: "Set the chain gem off",
-    text: "To cash a chain gem in, <b>match it again</b> like any other gem. Match "
-        + "the marked gem into the reds beside it — it will blast a whole line and "
-        + "pay out far more than an ordinary match.",
+    title: "Set the 4-chain off — it clears its ROW",
+    text: "Cash a chain gem in by <b>matching it again</b>. Match the <b>4</b> into "
+        + "the reds beside it and watch what it destroys: a <b>4-chain clears the "
+        + "whole row it sits in</b>.<br><span class='dim'>Gold highlights show what "
+        + "the blast swept.</span>",
     arm() {
       board = layout([
         "........", "........", "........",
-        "......R.",          // pull this down...
-        "....RR..",          // ...onto the chain gem at (4,4) and its neighbour
+        "......R.",
+        "....RR..",
         "........", "........", "........",
       ]);
       special = emptySpecials();
-      special[4][4] = "line4";                        // the chain gem
+      special[4][4] = "line4";
+      restrictToMove("3,6,4,6");
     },
     done: () => stats.detonations > (tutorialMark.detonations || 0),
-    cheer: "That is where the damage in this game actually comes from — not from "
-         + "matching three, but from building something and then cashing it in.",
+    cheer: "That is where damage really comes from — building something, then "
+         + "cashing it in. Matching three is just how you get there.",
   },
   {
-    title: "Fuse two chain gems",
-    text: "Two chain gems swiped <b>into each other</b> fuse — no colour match "
-        + "needed, it always works, and it hits harder than either would alone. "
-        + "Swap the two marked gems together.",
+    title: "An L-chain clears a COLUMN",
+    text: "Chain gems come in shapes, and the shape decides the blast. An <b>L</b> "
+        + "— made by matching in a corner — is already on the board. Set it off the "
+        + "same way, and it <b>clears its whole column</b> instead of its row.",
+    arm() {
+      board = layout([
+        "........", "........", "........",
+        "......R.",
+        "....RR..",
+        "........", "........", "........",
+      ]);
+      special = emptySpecials();
+      special[4][4] = "L";
+      restrictToMove("3,6,4,6");
+    },
+    done: () => stats.detonations > (tutorialMark.detonations || 0),
+    cheer: "Row for a <b>4</b>, column for an <b>L</b>. Same move, different cut.",
+  },
+  {
+    title: "A T-chain clears BOTH",
+    text: "A <b>T</b> is the big one: it clears <b>its row AND its column at once</b>. "
+        + "Set it off and watch the cross it leaves behind.",
+    arm() {
+      board = layout([
+        "........", "........", "........",
+        "......R.",
+        "....RR..",
+        "........", "........", "........",
+      ]);
+      special = emptySpecials();
+      special[4][4] = "T";
+      restrictToMove("3,6,4,6");
+    },
+    done: () => stats.detonations > (tutorialMark.detonations || 0),
+    cheer: "4 = row. L = column. T = both. That is the whole language.",
+  },
+  {
+    title: "Fuse two chain gems together",
+    text: "Swipe two chain gems <b>into each other</b> and they fuse. No colour "
+        + "match needed — it always works, and it hits far harder than setting off "
+        + "either one alone.",
     arm() {
       board = layout(["........", "........", "........", "........",
                       "........", "........", "........", "........"]);
       special = emptySpecials();
       special[4][3] = "line4"; special[4][4] = "line4";
+      restrictToMove("4,3,4,4");     // the fusion is the only thing to do
     },
     done: () => stats.fusions > (tutorialMark.fusions || 0),
-    cheer: "Fusions are the big turns. Saving a chain gem instead of spending it "
-         + "straight away is a real strategy.",
+    cheer: "Fusions are the big turns. Banking a chain gem instead of spending it "
+         + "straight away is a real decision.",
+  },
+  {
+    title: "Your gear rides along on every detonation",
+    text: "Everything so far is the board. <b>What a chain gem does beyond clearing "
+        + "gems is down to your gear.</b> This build binds <b>L</b> to <b>stun</b>. "
+        + "Set off this L and it clears its column <i>and</i> stuns the dummy — "
+        + "watch the enemy panel.",
+    arm() {
+      // Steps 1-6 ran with NO shape triggers at all, so nothing extra fired and
+      // each lesson was purely about the shape. The gear layer is introduced
+      // here, on its own, once the shapes are understood.
+      loadout.shapes = { L: "stun" };
+      board = layout([
+        "........", "........", "........",
+        "......R.",
+        "....RR..",
+        "........", "........", "........",
+      ]);
+      special = emptySpecials();
+      special[4][4] = "L";
+    },
+    done: () => enemies.some(e => e.stunned > 0),
+    cheer: "A different build would fire something else there — bleed, a heal, a "
+         + "free spell. Same board, different gear, different game.",
   },
   {
     title: "Read the telegraph, then end your turn",
-    text: "You get <b>three swipes a turn</b>. The enemy panel shows what it will "
-        + "do and when — that is what your swipes are for: setting up against a "
-        + "move you can already see. Press <b>End turn</b> when you're ready.",
+    text: "You get <b>three swipes a turn</b>. The enemy panel says what it will do "
+        + "and when — your swipes are for setting up against a move you can already "
+        + "see. Press <b>End turn</b> when you're ready.",
     arm() {
       board = layout(["........", "........", "........", "........",
                       "........", "........", "........", "........"]);
       special = emptySpecials();
+      restrictToMove(null);          // nothing to swap -- this step is the clock
     },
     done: () => stats.turns > (tutorialMark.turns || 0),
-    cheer: "That's everything. Colours, chain gems, fusions and the clock.",
+    cheer: "That's everything: shapes, blasts, fusions, gear and the clock.",
   },
 ];
+
+// True once the board has actually changed since this step was armed -- used
+// to tell "played a wrong move" apart from "swap snapped back, cost nothing".
+function swipesSpentThisStep() {
+  return (stats.shapes.line3 || 0) !== (tutorialMark.line3 || 0)
+      || stats.specials !== tutorialMark.specials
+      || stats.detonations !== tutorialMark.detonations
+      || stats.fusions !== tutorialMark.fusions;
+}
 
 function armTutorialStep(i) {
   tutorialStep = i;
@@ -3954,6 +4135,16 @@ function tutorialTick() {
     // Never let the tutorial run out of swipes -- a beginner mid-lesson should
     // not be forced into a turn boundary they have not been taught yet.
     if (tutorialStep < TUTORIAL.length - 1) swipes = SWIPES_PER_TURN;
+    /* If a swipe was spent and the goal still is not met, the player did
+       something other than the lesson -- so rebuild the board and let them try
+       again. Boards are built so the taught move is the only one, with ONE
+       unavoidable exception: completing four needs a gap (x x _ x), and the
+       lone gem can always slide into that gap to make three instead. Without
+       this reset that move would clear the lesson's gems and leave the step
+       impossible. Re-arming makes every wrong move harmless. */
+    if (tutorialStep !== TUTORIAL.length - 1 && swipesSpentThisStep()) {
+      armTutorialStep(tutorialStep);
+    }
     return;
   }
   renderTutorBar(step.cheer);
@@ -3981,8 +4172,9 @@ function startTutorial() {
   TUTORIAL_ACTIVE = true;
   // A deliberately plain build: one damage colour, no mana, no spells, nothing
   // to explain that the five steps do not cover.
-  begin({ R: "attack", G: "block", Y: "splash", B: "armour", line4: "cleave",
-          hardL: "stun", hardT: "dodge", spells: [] }, null, true);
+  // No shape triggers to begin with: steps 1-6 are purely about what the BOARD
+  // does, with nothing extra firing to muddy them. Step 7 adds the gear layer.
+  begin({ R: "attack", G: "block", Y: "splash", B: "armour", spells: [] }, null, true);
   armTutorialStep(0);
 }
 
