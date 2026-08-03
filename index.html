@@ -705,7 +705,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03g";
+const GAME_VERSION = "2026-08-03h";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -2332,6 +2332,19 @@ function detonateAll(fuse) {
     if (caught && color === loadout.wildChargeColor) { player.wildCharges += caught; addTurnTotal(color, caught); }
     stats.detonations++;
     log(`** ${shape} SPECIAL detonates -- ${fresh.length} gems destroyed`, "spec");
+  }
+
+  /* RULE 6, overflow rather than waste. A special caught by a blast is lifted
+     off the board and queued; if the guard stops the loop before the queue
+     drains, those gems used to be silently destroyed -- 24 of them in a
+     measured worst case. Put whatever is left back instead, so a chain that
+     runs long costs you the detonations, never the gems. */
+  for (const [shape, r, c] of fuse) {
+    if (!special[r][c]) special[r][c] = shape;
+  }
+  if (fuse.length) {
+    log(`** the chain runs out of reach -- ${fuse.length} special(s) stay on the board`,
+        "spec");
   }
   return [...blasted].map(k => [Math.floor(k / SIZE), k % SIZE]);
 }
