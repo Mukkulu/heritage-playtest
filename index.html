@@ -705,7 +705,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03j";
+const GAME_VERSION = "2026-08-03k";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -1093,7 +1093,7 @@ const SPELLS = {
   fire:    { cost: 50, label: "Fire",    note: "20 to one" },
   thunder: { cost: 90, label: "Thunder", note: "12 to all" },
   gamble:  { cost: 80, label: "Gambler's Gambit", note: "next 3-match also leaves a random chain gem (4/L/T, or line5 at 10%)" },
-  acid:    { cost: 75, label: "Acid Rain", note: `${ACID_DMG_PER_TURN} dmg/turn to every enemy, ${ACID_TURNS} turns` },
+  acid:    { cost: 75, label: "Acid Rain", note: `${ACID_DMG_PER_TURN} dmg/turn to every enemy, ${ACID_TURNS} turns; stacks` },
   freeze:  { cost: 55, label: "Freeze Blast", note: `1 freeze stack on every enemy; at ${FREEZE_STACKS_THRESHOLD} it stuns, ignoring resolve` },
   amplify: { cost: 55, label: "Damage Amplified",
              note: `+${Math.round(DMG_AMP_PER_STACK * 100)}% damage this turn, stacks to +${Math.round(DMG_AMP_CAP * 100)}%` },
@@ -2765,9 +2765,26 @@ function resolveSpellEffect(name, factor, chaotic) {
     return { text: "the next 3-match is a gamble — it'll also leave a random chain gem", cls: "good" };
   }
   if (name === "acid") {
+    /* STACKS, like bleed -- a second cast adds to the damage per turn rather
+       than replacing it, and refreshes the duration to full. Plain assignment
+       meant recasting while acid was already ticking bought nothing, and could
+       even WEAKEN it: cast once under Damage Amplified and again after the
+       amp expired, and the weaker value overwrote the stronger one.
+
+       Intensity rather than duration, for the same reason bleed works that
+       way, and because damage that lands sooner is less likely to be wasted
+       on an enemy that dies mid-timer. Uncapped, again like bleed. */
     const dmg = Math.round(ACID_DMG_PER_TURN * factor);
-    for (const e of living()) { e.acidTurns = ACID_TURNS; e.acidDmg = dmg; }
-    return { text: `acid rain corrodes everything for ${dmg}/turn, ${ACID_TURNS} turns${boosted}`, cls: "hit" };
+    let stacked = false;
+    for (const e of living()) {
+      if (e.acidTurns > 0) stacked = true;
+      e.acidDmg += dmg;
+      e.acidTurns = Math.max(e.acidTurns, ACID_TURNS);
+    }
+    const worst = Math.max(0, ...living().map(e => e.acidDmg));
+    return { text: stacked
+      ? `acid rain thickens — now ${worst}/turn for ${ACID_TURNS} turns${boosted}`
+      : `acid rain corrodes everything for ${dmg}/turn, ${ACID_TURNS} turns${boosted}`, cls: "hit" };
   }
   if (name === "freeze") {
     for (const e of living()) applyFreeze(e, "Freeze blast");
@@ -2915,6 +2932,9 @@ async function endTurn() {
     }
     if (e.acidTurns > 0) {
       const ac = dealDamage(e, e.acidDmg); e.acidTurns--;
+      // Clear the intensity when the timer runs out, or the next cast would
+      // stack onto a dead value and start at double strength.
+      if (e.acidTurns === 0) e.acidDmg = 0;
       log(`${e.name} corrodes for ${ac} (${e.acidTurns} turn(s) left)`, "hit");
     }
   }
