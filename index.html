@@ -162,6 +162,10 @@
     box-shadow: 0 10px 28px rgba(0, 0, 0, .55);
   }
   .combobox:hover .combotip, .combobox:focus-within .combotip { display: block; }
+  .combotip .powers td { white-space: normal; padding-bottom: 8px; }
+  .combotip .powers .pair { font-size: 15px; font-weight: 800; color: #f0cf78;
+                            padding-right: 12px; }
+  .combotip .powers .pw { color: #f0cf78; font-weight: 700; }
   .combotip h4 {
     margin: 0 0 8px; font-size: 12px; color: var(--dim);
     text-transform: uppercase; letter-spacing: .6px; font-weight: 600;
@@ -233,7 +237,11 @@
     .gembox .top { font-size: 10.5px; gap: 3px; line-height: 1.15; }
     .gembox .g { font-size: 12px; }
     .turn-total { font-size: 15px; margin-bottom: 2px; }
-    .combobox { display: none; }   /* its tooltip needs hover; useless on touch */
+    /* Kept in portrait now that it leads with YOUR chain-gem powers -- it is
+       the most useful reference in the game and tabindex makes it open on tap
+       (:focus-within), so it is not hover-only. */
+    .combobox { grid-column: 1 / -1; }
+    .combotip { left: 0; right: 0; max-width: none; }
 
     /* Compact spell buttons -- they now sit above the board, so every pixel
        they take is a pixel of board pushed off-screen. */
@@ -697,7 +705,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03f";
+const GAME_VERSION = "2026-08-03g";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -2174,7 +2182,8 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     // (stun, dodge) only ever gains one stack from this, same as an
     // ordinary detonation would.
     if (!(otherShape && SHAPE_MULT[otherShape] !== undefined)) return [];
-    const boosted = Math.floor(SPECIAL_GEMS * PER_GEM * SHAPE_MULT[otherShape] * WILDCARD_POWER_MULT);
+    const boosted = Math.floor(
+      SPECIAL_GEMS * PER_GEM * SHAPE_MULT[otherShape] * WILDCARD_POWER_MULT * valueMult);
     const wtag = `${tag} wildcard x${WILDCARD_POWER_MULT}`;
     if (otherColor) {
       const eff = loadout.colors[otherColor];
@@ -2387,7 +2396,8 @@ function mixedBlast(a, b, r1, c1, r2, c2) {
 function comboDetonate(shape, colours, cells, opts) {
   opts = opts || {};
   const value = opts.value === undefined
-    ? SPECIAL_GEMS * PER_GEM * SHAPE_MULT[shape] * 2 : opts.value;
+    ? Math.floor(SPECIAL_GEMS * PER_GEM * SHAPE_MULT[shape] * 2 * valueMult)
+    : opts.value;
   const tag = opts.tag === undefined ? `${shape}+${shape} COMBO` : opts.tag;
   for (const col of [...colours].sort()) {
     const eff = loadout.colors[col];
@@ -2430,7 +2440,8 @@ function comboDetonate(shape, colours, cells, opts) {
   for (const col of Object.keys(caught).sort()) {
     const count = caught[col];
     const eff = loadout.colors[col];
-    if (eff) applyEffect(eff, count * PER_GEM, `${shape} combo blast`, col);
+    if (eff) applyEffect(eff, Math.floor(count * PER_GEM * valueMult),
+                         `${shape} combo blast`, col);
     if (count && col === loadout.locustColor) player.locusts += count;
     if (count && col === loadout.wildChargeColor) { player.wildCharges += count; addTurnTotal(col, count); }
   }
@@ -2471,9 +2482,13 @@ function doFuse(r1, c1, r2, c2) {
   // charged half is worth more -- times a weight derived from how often the
   // board actually offers that pairing.
   const rarity = fusionRarityMult(famA, famB);
-  // floor, not round -- matches the Python build's int() truncation exactly
+  /* valueMult belongs here too: a fusion IS a swipe, so "your next swipe's
+     payout is doubled" has to reach it. It did not -- the arming was fixed on
+     2026-08-02 but this calculation still ignored it, so a banked double spent
+     on a fusion did nothing at all.
+     floor, not round -- matches the Python build's int() truncation exactly */
   const value = Math.floor(
-    SPECIAL_GEMS * PER_GEM * (SHAPE_MULT[a] + SHAPE_MULT[b]) * rarity);
+    SPECIAL_GEMS * PER_GEM * (SHAPE_MULT[a] + SHAPE_MULT[b]) * rarity * valueMult);
   const sameFamily = famA === famB;
 
   let cells, label, shown;
@@ -3625,12 +3640,47 @@ function comboBoxHTML() {
       + `<td class="w">&times;${w}</td></tr>`;
   }).join("");
 
-  return `<div class="combobox" tabindex="0">Combos<span class="arrow">&#9662;</span>
+  /* YOUR chain gems come first. The pairing multipliers below are reference
+     material you consult once; what a gem does in YOUR build is the thing you
+     need mid-turn, and it used to be buried under a table of numbers. Each row
+     is a socket you actually filled: the mark drawn on the board, what that
+     shape's blast clears, and -- spelled out in full -- the power your gear
+     hangs on it. */
+  const SHAPE_BLAST = {
+    line4: "clears its whole row",
+    line5: "blasts a 3x3 around itself",
+    L: "clears its whole column",
+    T: "clears its row AND its column",
+  };
+  const SOCKET_NAME = {
+    line4: "4-chain", line5: "5-chain", L: "L-chain", T: "T-chain",
+    ultimate: "Ultimate",
+  };
+  const powerRows = ["line4", "line5", "L", "T", "ultimate"].map(sock => {
+    const trig = loadout.shapes[sock];
+    if (!trig) return "";
+    const how = sock === "ultimate"
+      ? "fires when you fuse two 5-chains together"
+      : SHAPE_BLAST[sock];
+    return `<tr><td class="pair">${MARK[sock] || "★"}</td>`
+      + `<td class="eff"><b>${SOCKET_NAME[sock]}</b> — ${how}<br>`
+      + `<span class="pw">${trig.replace(/_/g, " ")}</span>: `
+      + `${TRIGGER_DESC[trig] || ""}</td></tr>`;
+  }).join("");
+
+  const powers = powerRows
+    ? `<h4>Your chain gems</h4><table class="powers">${powerRows}</table>`
+    : `<h4>Your chain gems</h4><p class="foot">This build binds no chain-gem
+       powers — its gems still blast, they just carry nothing extra.</p>`;
+
+  return `<div class="combobox" tabindex="0">Chain gems<span class="arrow">&#9662;</span>
     <div class="combotip">
-      <h4>Swipe two special gems together</h4>
+      ${powers}
+      <h4 style="margin-top:14px">Fusing two of them</h4>
       <table>${rows}</table>
       <p class="foot">Rarer pairings pay more &mdash; the multiplier is derived from
-      how often the board actually offers each one. payout scales with how many gems the shape consumed.</p>
+      how often the board actually offers each one. Payout also scales with how many
+      gems the shape consumed.</p>
     </div></div>`;
 }
 
