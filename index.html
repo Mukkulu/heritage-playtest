@@ -347,6 +347,34 @@
   .gem.fresh { animation: drop .28s cubic-bezier(.2,.9,.3,1.2); }
   @keyframes drop { 0% { transform: translateY(-30px); opacity: 0; } 100% { transform: none; opacity: 1; } }
 
+  /* ---------- reduced flashing ----------
+     A tester reported the flashing between matches was uncomfortable. The
+     culprits are the two INFINITE ALTERNATING pulses on doomed/swept gems,
+     which strobe for the whole hold beat, and the brightness spike in the pop.
+
+     This removes the strobing WITHOUT removing the information: doomed and
+     swept gems keep their distinct static outlines (white = you matched it,
+     gold = a special swept it), and gems still visibly shrink away when they
+     go. Only the pulsing, the brightness ramps and the drop-in are dropped.
+     The pacing is untouched, so cascades remain just as readable.
+
+     Default ON for anyone whose OS asks for reduced motion. */
+  body.reduced-fx .gem.doomed,
+  body.reduced-fx .gem.swept { animation: none; filter: none; }
+  body.reduced-fx .gem.pop { animation: popQuiet .30s ease-out; }
+  @keyframes popQuiet {
+    0%   { transform: scale(1); }
+    100% { transform: scale(.35); opacity: 0; }
+  }
+  body.reduced-fx .gem.fresh { animation: none; }
+  body.reduced-fx .turn-total.bump { animation: none; }
+  body.reduced-fx #board.resolving { opacity: 1; }
+
+  .fxrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px;
+           color: var(--dim); margin-top: 10px; }
+  .fxrow input { accent-color: var(--B); }
+  .fxrow label { cursor: pointer; }
+
   /* ---------- side panel ---------- */
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
   .panel + .panel { margin-top: 12px; }
@@ -488,6 +516,12 @@
     <h3 class="section-h" style="margin-top:0">Pick a build and go</h3>
     <div class="cards" id="presetCards"></div>
 
+    <div class="fxrow">
+      <input type="checkbox" id="fxToggle">
+      <label for="fxToggle">Reduce flashing — stops gems pulsing and flaring while a match
+        resolves. Everything still shows what it is about to do.</label>
+    </div>
+
     <label class="advanced-toggle">
       <input type="checkbox" id="advancedToggle">
       <span>Advanced: craft a fully custom build, one gem per socket</span>
@@ -560,6 +594,10 @@
           <!-- Notes are timestamped into the log at the turn you wrote them,
                so "this felt wrong" lands next to the thing that caused it
                rather than being reconstructed afterwards. -->
+          <div class="fxrow" style="margin:0 0 8px">
+            <input type="checkbox" id="fxToggleGame">
+            <label for="fxToggleGame">Reduce flashing</label>
+          </div>
           <div class="notebox">
             <input id="noteInput" type="text" maxlength="300"
                    placeholder="Note something (enter to add) — lands in the log at this turn">
@@ -614,7 +652,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03b";
+const GAME_VERSION = "2026-08-03c";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -1181,7 +1219,8 @@ const SETS = {
   voidsGift: {
     name: "Void's Gift",
     twoPcBlurb: "every 3 blue gems matched spawns a void gem -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too",
-    fourPcBlurb: "matched void gems spawn more, and chip everything on the board for 1 more",
+    fourPcBlurb: "every void gem you match reseeds another, so spending them never thins "
+      + "them out -- only blue grows the count. They also chip everything for 1 more",
     twoPc: { voidGift2pc: true },
     fourPc: { voidGift4pc: true },
   },
@@ -1850,11 +1889,16 @@ function applySeededGem(color, gemCount, tag) {
     player.hp -= selfhit;
     log(`${tag}: void gem hits ${t.name} for ${value} (and you for ${selfhit})`, "hit");
     if (loadout.voidGift4pc) {
-      // 4pc: matched void gems spawn more, and void cascades chip
-      // everything on the board (living enemies) for a flat 1.
-      const placed = seedGems("X", 1);
+      /* 4pc: matching void gems replaces them ONE FOR ONE, so cashing them in
+         never thins them out -- a board that has gone void stays void, and
+         the only thing that can grow the population is blue (the 2pc). That
+         makes the set a commitment rather than a trickle: it ratchets up
+         while you feed it blue and holds its ground while you spend it.
+         Also chips every living enemy for a flat 1. */
+      const placed = seedGems("X", gemCount);
       for (const e of living()) dealDamage(e, 1);
-      if (placed) log(`${tag}: void cascade seeds another void gem, 1 damage to all enemies`, "hit");
+      if (placed) log(`${tag}: the void replaces itself -- ${placed} void gem(s) reseeded, `
+        + `1 damage to all enemies`, "hit");
     }
   }
 }
@@ -3927,6 +3971,35 @@ document.querySelectorAll("#presetCards .card").forEach(c => c.onclick = () => {
 document.getElementById("advancedToggle").onchange = e => {
   document.getElementById("advancedSection").classList.toggle("hidden", !e.target.checked);
 };
+/* ---- reduced flashing ----
+   Remembered across runs, because a tester who needs it needs it every time.
+   Defaults to ON when the operating system asks for reduced motion, which is
+   the only signal we get without asking. Both checkboxes (setup screen and
+   in-game) drive this one function and stay in step, and it applies live, so
+   nobody has to restart a run to get relief. */
+const FX_KEY = "heritage.reducedFx";
+
+function setReducedFx(on, persist) {
+  document.body.classList.toggle("reduced-fx", !!on);
+  for (const id of ["fxToggle", "fxToggleGame"]) {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!on;
+  }
+  if (persist) { try { localStorage.setItem(FX_KEY, on ? "1" : "0"); } catch (e) {} }
+}
+
+(function initReducedFx() {
+  let stored = null;
+  try { stored = localStorage.getItem(FX_KEY); } catch (e) {}
+  const prefersReduced = window.matchMedia
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  setReducedFx(stored === null ? prefersReduced : stored === "1", false);
+  for (const id of ["fxToggle", "fxToggleGame"]) {
+    const el = document.getElementById(id);
+    if (el) el.onchange = ev => setReducedFx(ev.target.checked, true);
+  }
+})();
+
 /* Renders TESTING_FOCUS onto the front page. Whole thing hides itself if the
    list is emptied, so clearing it out is a valid way to turn it off. */
 (function renderTestingFocus() {
