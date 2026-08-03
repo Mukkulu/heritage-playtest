@@ -697,7 +697,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03e";
+const GAME_VERSION = "2026-08-03f";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -2512,10 +2512,29 @@ function doFuse(r1, c1, r2, c2) {
 
 /* ============================ resolution ============================ */
 
-const anchorOf = cells => {
+/* Where the chain gem lands, and therefore where its blast is centred.
+
+   For a straight run the median cell is the middle, which is right. For an L
+   or a T it is NOT: the median is wherever the sort happens to land, which put
+   the gem on the END of an arm. An L with its corner at (2,4) dropped its gem
+   at (2,6) and cleared column 6 -- a column the player never built -- and a T
+   with its stem in column 4 cleared column 3. Three of the four L/T geometries
+   were wrong; the fourth was right by luck.
+
+   The junction is the only cell with BOTH a horizontal and a vertical
+   neighbour inside the shape (crosses, which would have several, no longer
+   exist), so an L or T now centres on its corner and matches the documented
+   rule that "an L clears its column". */
+function anchorOf(cells, shape) {
   const sorted = cells.slice().sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  if (shape === "L" || shape === "T") {
+    const has = (r, c) => sorted.some(p => p[0] === r && p[1] === c);
+    const junction = sorted.find(([r, c]) =>
+      (has(r, c - 1) || has(r, c + 1)) && (has(r - 1, c) || has(r + 1, c)));
+    if (junction) return junction;
+  }
   return sorted[Math.floor(sorted.length / 2)];
-};
+}
 
 async function resolveBoard() {
   let chain = 0;
@@ -2564,7 +2583,7 @@ async function resolveBoard() {
       }
       let anchor = null;
       if (MAKES_SPECIAL.has(shape)) {
-        anchor = anchorOf(cells);
+        anchor = anchorOf(cells, shape);
         special[anchor[0]][anchor[1]] = shape;
         stats.specials++;
         log(`++ ${shape} leaves a special ${color} gem (${BLAST_DESC[shape]})`, "spec");
@@ -3449,7 +3468,36 @@ function shownValue(effect, value) {
 /* The immediate result of one swap. Deliberately does NOT follow cascades --
    the whole point is what you can count on, not what you might get lucky with. */
 function previewSwap(r1, c1, r2, c2) {
-  if (special[r1][c1] && special[r2][c2]) return { fuse: true };
+  if (special[r1][c1] && special[r2][c2]) {
+    /* A fusion used to preview as the bare word "FUSE" -- no damage, no shape,
+       nothing -- while every ordinary swap told you exactly what you would get.
+       On a phone that was the ONLY thing available, because the Combos
+       reference needs hover and is hidden in portrait. Reported as "matching
+       4chain and 4chain telegraphs nothing", and it was right.
+
+       Everything here mirrors doFuse's own maths, so the preview cannot
+       promise a number the fusion will not deliver. */
+    const a = special[r1][c1], b = special[r2][c2];
+    if (a === "poison" || b === "poison") return { fuse: true, poison: true };
+    const famA = baseShape(a), famB = baseShape(b);
+    const rarity = fusionRarityMult(famA, famB);
+    const value = Math.floor(
+      SPECIAL_GEMS * PER_GEM * (SHAPE_MULT[a] + SHAPE_MULT[b]) * rarity);
+    const same = famA === famB;
+    const best = RANK.indexOf(a) >= RANK.indexOf(b) ? a : b;
+    const out = same ? comboBlast(best, r1, c1, r2, c2)
+                     : mixedBlast(a, b, r1, c1, r2, c2);
+    // Both halves' colours pay out, so both are worth showing.
+    const colours = [...new Set([board[r1][c1], board[r2][c2]])];
+    const effects = colours.map(col => {
+      const eff = effectLabel(loadout, col);
+      return eff ? { icon: EFFECT_ICON[eff] || "?", value: shownValue(eff, value) } : null;
+    }).filter(Boolean);
+    const trigger = !!(loadout.shapes[baseShape(a)] || loadout.shapes[baseShape(b)]);
+    return { fuse: true, pair: `${MARK[a] || a}+${MARK[b] || b}`,
+             gems: out[0].length, label: out[1], rarity, effects, trigger,
+             ignites: same && famA === "line5" };
+  }
   swapCells(r1, c1, r2, c2);
   const hits = findMatches(board).filter(m =>
     m.cells.some(([r, c]) => (r === r1 && c === c1) || (r === r2 && c === c2)));
@@ -3486,7 +3534,13 @@ function previewSwap(r1, c1, r2, c2) {
 }
 
 function previewLabel(p) {
-  if (p.fuse) return "FUSE";
+  if (p.fuse) {
+    if (p.poison) return "POISON GEM";
+    const eff = p.effects.map(e => e.icon + e.value).join(" ");
+    return `${p.pair} ${eff} · ${p.gems} gems`
+      + (p.rarity > 1 ? ` ×${p.rarity}` : "")
+      + (p.ignites ? " · IGNITES ALL" : "");
+  }
   return p.matches.map(m =>
     m.icon + m.value + (m.leaves ? "→" + m.leaves : "")).join(" ");
 }
@@ -3602,7 +3656,7 @@ function render(fresh) {
           tip.className = "tip";
           tip.textContent = previewLabel(p);
           d.appendChild(tip);
-          if (!p.fuse && p.matches.some(m => m.trigger)) tip.classList.add("trig");
+          if (p.fuse ? p.trigger : p.matches.some(m => m.trigger)) tip.classList.add("trig");
         }
       }
     }
