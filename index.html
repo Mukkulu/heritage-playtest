@@ -370,6 +370,36 @@
   body.reduced-fx .turn-total.bump { animation: none; }
   body.reduced-fx #board.resolving { opacity: 1; }
 
+  /* The two ways in. Deliberately the largest thing on the page. */
+  .startrow { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; margin: 0 0 18px; }
+  @media (max-width: 620px) { .startrow { grid-template-columns: 1fr; } }
+  .startbtn {
+    text-align: left; padding: 13px 15px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    font: inherit; display: block;
+  }
+  .startbtn b { display: block; font-size: 14.5px; margin-bottom: 3px; }
+  .startbtn span { display: block; font-size: 12.5px; color: var(--dim); line-height: 1.4; }
+  .startbtn:hover { border-color: #5b6580; }
+  .startbtn.primary {
+    border-color: rgba(74,142,222,.65); background: rgba(74,142,222,.14);
+  }
+  .startbtn.primary b { color: #cfe0f5; }
+  .tutorial > summary { cursor: pointer; }
+  .tutorial > summary::-webkit-details-marker { display: none; }
+  .tutorial > summary::before { content: "▸ "; color: var(--dim); }
+  .tutorial[open] > summary::before { content: "▾ "; }
+
+  #tutorBar {
+    border: 1px solid rgba(74,142,222,.55); background: rgba(74,142,222,.10);
+    border-radius: 10px; padding: 11px 14px; margin: 0 0 14px;
+  }
+  .tutorhead { font-size: 14.5px; display: flex; align-items: center; gap: 10px; }
+  .tutorhead button { margin-left: auto; font-size: 11.5px; padding: 3px 9px; }
+  .tutortext, .tutorcheer { font-size: 13.5px; line-height: 1.55; margin-top: 6px; }
+  .tutortext .dim, #tutorBar .dim { color: var(--dim); }
+  .tutorcheer { color: #9fd8b4; }
+
   .fxrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px;
            color: var(--dim); margin-top: 10px; }
   .fxrow input { accent-color: var(--B); }
@@ -480,20 +510,34 @@
 
   <!-- ============ loadout picker ============ -->
   <div id="setup">
-    <h1>Match-3 Combat Prototype</h1>
-    <div class="sub">Same four colours -- what each one does is entirely up to what you pick.</div>
+    <h1>Heritage — combat prototype</h1>
+    <div class="sub">A puzzle where your gear decides what a match actually does.</div>
     <p class="intro">
-      You're a blacksmith's heir clearing a dungeon, one fight at a time, using nothing but
-      what your gear lets a match do. Quick rundown below, or just dive in.
+      You're a blacksmith's heir clearing a dungeon, one fight at a time. Match gems to
+      attack, block and cast — but <b>what each colour does is entirely down to what you're
+      wearing</b>.
     </p>
+
+    <!-- A first-time player reported there was nothing teaching them how to play, just
+         text. So the first thing on the page is now a way in, not a wall. -->
+    <div class="startrow">
+      <button id="tutorialBtn" class="startbtn primary">
+        <b>Never played one of these?</b>
+        <span>Learn by playing — five short steps, about two minutes</span>
+      </button>
+      <button id="jumpBtn" class="startbtn">
+        <b>I know how match-3 works</b>
+        <span>Take me to the builds</span>
+      </button>
+    </div>
 
     <p class="hint" style="margin:0 0 16px">
       Also trying the <b>open-world prototype</b>? It wraps this same combat in a
       map to explore between fights &mdash; <a href="overworld.html">play it here</a>.
     </p>
 
-    <div class="tutorial">
-      <h3 class="section-h" style="margin-top:0">How to play</h3>
+    <details class="tutorial" id="howtoBox">
+      <summary class="section-h" style="margin-top:0">How to play — the short version</summary>
       <ol>
         <li><b>Swap</b> two adjacent gems (drag or click-click). No match? It snaps back — free, no swipe lost.</li>
         <li><b>Match 3+ of a colour</b> to trigger whatever that colour does — the icon on each gem shows you
@@ -506,9 +550,9 @@
         <li>Five fights back to back, <b>no healing between them</b> — health carries over. See how far you get.</li>
       </ol>
       <p class="hint" style="margin:10px 0 0">Once you're in, the <b>Reference</b> button explains your exact class + tier piece combo in full.</p>
-    </div>
+    </details>
 
-    <details class="focusbox" id="focusBox" open>
+    <details class="focusbox" id="focusBox">
       <summary><b>What we're testing right now</b> <span id="focusUpdated"></span></summary>
       <div id="focusBody"></div>
     </details>
@@ -567,6 +611,7 @@
   <div id="game" class="hidden">
     <h1 id="encTitle"><span id="encName"></span><button class="refbtn" id="refBtn">Reference</button></h1>
     <div class="sub" id="encSub"></div>
+    <div id="tutorBar" class="hidden"></div>
     <div class="game">
       <div class="boardwrap">
         <div class="gemrow" id="gemrow"></div>
@@ -652,7 +697,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03c";
+const GAME_VERSION = "2026-08-03d";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -1636,7 +1681,7 @@ const fullLog = [];
 const stats = {
   shapes: {}, specials: 0, fusions: 0, combos: 0, fusionPairs: {},
   spells: {}, turns: 0, dmgTaken: 0, encounters: [],
-  dmgDealt: 0, manaGained: 0, manaSpent: 0, manaPeak: 0,
+  dmgDealt: 0, manaGained: 0, manaSpent: 0, manaPeak: 0, detonations: 0,
   ampPeak: 0, etherealPeak: 0, freezeStuns: 0, staggerTicks: 0,
   castsPerTurn: {},
 };
@@ -2267,6 +2312,7 @@ function detonateAll(fuse) {
     if (effect && caught) applyEffect(effect, Math.floor(caught * PER_GEM * valueMult), `${shape} blast`, color);
     if (caught && color === loadout.locustColor) player.locusts += caught;
     if (caught && color === loadout.wildChargeColor) { player.wildCharges += caught; addTurnTotal(color, caught); }
+    stats.detonations++;
     log(`** ${shape} SPECIAL detonates -- ${fresh.length} gems destroyed`, "spec");
   }
   return [...blasted].map(k => [Math.floor(k / SIZE), k % SIZE]);
@@ -2933,6 +2979,9 @@ async function endTurn() {
 
 function afterAction() {
   render(true);
+  // The tutorial owns win/lose while it is running: the dummy cannot realistically
+  // kill you and must not end the lesson if it somehow dies.
+  if (tutorialStep >= 0) return tutorialTick();
   if (player.hp <= 0) return finish(false);
   if (!living().length) return nextEncounter();
 }
@@ -3649,7 +3698,16 @@ function render(fresh) {
 
 /* ============================ setup ============================ */
 
+/* A dummy with enough health to survive the whole lesson and a slow, small
+   attack -- it exists to give the telegraph something to say, not to threaten
+   anyone who is still learning to see a match. */
+const TUTORIAL_ENCOUNTER = ["A training dummy",
+  // Deliberately unkillable. A single fusion in step 4 comfortably cleared 900
+  // in testing, and a dead dummy leaves step 5 with no telegraph to read.
+  () => [mkEnemy("Training dummy", 999999, [["swing", 3, 6]])]];
+
 function encounterDef(i) {
+  if (tutorialStep >= 0 || TUTORIAL_ACTIVE) return TUTORIAL_ENCOUNTER;
   return i < ENCOUNTERS.length ? ENCOUNTERS[i]
                                : endlessWave(i - ENCOUNTERS.length + 1);
 }
@@ -3709,7 +3767,226 @@ function startEncounter() {
   render(true);
 }
 
-function begin(picksArg, setKeys) {
+/* ============================ tutorial ============================
+   A first-time player reported there was nothing teaching them how to play --
+   just a wall of text on the front page. Text was the problem, so this teaches
+   by doing: five short goals, each on a hand-seeded board where the move that
+   is being taught is available immediately. Nobody can get stuck hunting for a
+   shape that isn't there.
+
+   It runs inside the real game screen using the real engine -- no separate
+   rules -- with one training dummy, and swipes are refilled after every move
+   until the last step, so the fight never presses on you while you are still
+   learning to see the board. */
+
+/* Builds a board from a template: one string per row, a colour letter for a
+   cell the lesson needs and "." for filler.
+
+   Filler is chosen greedily and then the whole board is REPAIRED until
+   findMatches() comes back empty, recolouring only filler cells. The greedy
+   pass alone is not enough -- it only sees the cells already decided to its
+   left and above, so a pair of fixed cells to its right can still complete a
+   run through it. Checking the real matcher afterwards is the only thing that
+   actually guarantees a clean board, and a clean board is the whole point:
+   a lesson that resolves itself before the player touches it teaches nothing. */
+function layout(rows) {
+  const fixed = new Set();
+  const b = Array.from({ length: SIZE }, () => new Array(SIZE).fill(null));
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const ch = (rows[r] || "")[c];
+      if (ch && ch !== ".") { b[r][c] = ch; fixed.add(key(r, c)); }
+    }
+  }
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (b[r][c]) continue;
+      b[r][c] = COLORS.find(col =>
+        !(c >= 2 && b[r][c - 1] === col && b[r][c - 2] === col) &&
+        !(r >= 2 && b[r - 1][c] === col && b[r - 2][c] === col)) || COLORS[0];
+    }
+  }
+  let guard = 0;
+  for (;;) {
+    const ms = findMatches(b);
+    if (!ms.length || guard++ > 400) break;
+    let changed = false;
+    for (const m of ms) {
+      for (const [r, c] of m.cells) {
+        if (fixed.has(key(r, c))) continue;
+        const alt = COLORS.filter(x => x !== b[r][c]);
+        b[r][c] = alt[guard % alt.length];
+        changed = true;
+        break;
+      }
+      if (changed) break;
+    }
+    if (!changed) break;   // every offending cell is load-bearing; give up
+  }
+  return b;
+}
+
+let tutorialStep = -1;   // -1 = not in the tutorial
+let TUTORIAL_ACTIVE = false;
+let tutorialMark = {};   // counters snapshotted when a step is armed
+
+const TUTORIAL = [
+  {
+    title: "Swap two gems to line up three",
+    text: "Drag one gem onto a neighbour — or tap one, then the other. Line up "
+        + "<b>three of the same colour</b> and they clear. Here, pull the red gem "
+        + "<b>down</b> into the row of reds.<br><span class='dim'>A swap that makes no "
+        + "match just snaps back. It costs you nothing, so experiment freely.</span>",
+    arm() {
+      //          0123456 7
+      board = layout([
+        "........", "........", "........",
+        "...R....",          // the red to pull down
+        ".RR.....",          // ...into these two
+        "........", "........", "........",
+      ]);
+      special = emptySpecials();
+    },
+    done: () => (stats.shapes.line3 || 0) > (tutorialMark.line3 || 0),
+    cheer: "That's the whole basic move. Red is your <b>attack</b> colour in this "
+         + "build, so those three just hit the dummy.",
+  },
+  {
+    title: "Now line up FOUR",
+    text: "Four in a row does something different: it <b>does not pay out</b>. It "
+        + "leaves a <b>chain gem</b> behind instead — the marked one. There's a "
+        + "gap in the red row; pull the red gem down to fill it and make four.",
+    arm() {
+      // NOT three-in-a-row here -- that is already a match. Two, a gap, then a
+      // fourth, so filling the gap is what makes the run of four.
+      board = layout([
+        "........", "........", "........",
+        "...R....",          // pull this one down...
+        ".RR.R...",          // ...into the gap, making four
+        "........", "........", "........",
+      ]);
+      special = emptySpecials();
+    },
+    done: () => stats.specials > (tutorialMark.specials || 0),
+    cheer: "That gem is now stored power. It pays nothing until you set it off.",
+  },
+  {
+    title: "Set the chain gem off",
+    text: "To cash a chain gem in, <b>match it again</b> like any other gem. Match "
+        + "the marked gem into the reds beside it — it will blast a whole line and "
+        + "pay out far more than an ordinary match.",
+    arm() {
+      board = layout([
+        "........", "........", "........",
+        "......R.",          // pull this down...
+        "....RR..",          // ...onto the chain gem at (4,4) and its neighbour
+        "........", "........", "........",
+      ]);
+      special = emptySpecials();
+      special[4][4] = "line4";                        // the chain gem
+    },
+    done: () => stats.detonations > (tutorialMark.detonations || 0),
+    cheer: "That is where the damage in this game actually comes from — not from "
+         + "matching three, but from building something and then cashing it in.",
+  },
+  {
+    title: "Fuse two chain gems",
+    text: "Two chain gems swiped <b>into each other</b> fuse — no colour match "
+        + "needed, it always works, and it hits harder than either would alone. "
+        + "Swap the two marked gems together.",
+    arm() {
+      board = layout(["........", "........", "........", "........",
+                      "........", "........", "........", "........"]);
+      special = emptySpecials();
+      special[4][3] = "line4"; special[4][4] = "line4";
+    },
+    done: () => stats.fusions > (tutorialMark.fusions || 0),
+    cheer: "Fusions are the big turns. Saving a chain gem instead of spending it "
+         + "straight away is a real strategy.",
+  },
+  {
+    title: "Read the telegraph, then end your turn",
+    text: "You get <b>three swipes a turn</b>. The enemy panel shows what it will "
+        + "do and when — that is what your swipes are for: setting up against a "
+        + "move you can already see. Press <b>End turn</b> when you're ready.",
+    arm() {
+      board = layout(["........", "........", "........", "........",
+                      "........", "........", "........", "........"]);
+      special = emptySpecials();
+    },
+    done: () => stats.turns > (tutorialMark.turns || 0),
+    cheer: "That's everything. Colours, chain gems, fusions and the clock.",
+  },
+];
+
+function armTutorialStep(i) {
+  tutorialStep = i;
+  const step = TUTORIAL[i];
+  tutorialMark = {
+    line3: stats.shapes.line3 || 0, specials: stats.specials,
+    detonations: stats.detonations, fusions: stats.fusions, turns: stats.turns,
+  };
+  step.arm();
+  swipes = SWIPES_PER_TURN;
+  renderTutorBar();
+  render(true);
+}
+
+function renderTutorBar(cheer) {
+  const bar = document.getElementById("tutorBar");
+  if (tutorialStep < 0) { bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+  const step = TUTORIAL[tutorialStep];
+  bar.innerHTML =
+    `<div class="tutorhead"><b>Step ${tutorialStep + 1} of ${TUTORIAL.length}</b>`
+    + ` — ${step.title}<button id="tutorSkip">Skip tutorial</button></div>`
+    + (cheer ? `<div class="tutorcheer">${cheer}</div>`
+             : `<div class="tutortext">${step.text}</div>`);
+  const skip = document.getElementById("tutorSkip");
+  if (skip) skip.onclick = () => location.reload();
+}
+
+/* Called after every resolved action while the tutorial is running. */
+function tutorialTick() {
+  if (tutorialStep < 0) return;
+  const step = TUTORIAL[tutorialStep];
+  if (!step.done()) {
+    // Never let the tutorial run out of swipes -- a beginner mid-lesson should
+    // not be forced into a turn boundary they have not been taught yet.
+    if (tutorialStep < TUTORIAL.length - 1) swipes = SWIPES_PER_TURN;
+    return;
+  }
+  renderTutorBar(step.cheer);
+  const last = tutorialStep === TUTORIAL.length - 1;
+  setTimeout(() => {
+    if (last) { finishTutorial(); return; }
+    armTutorialStep(tutorialStep + 1);
+  }, last ? 1400 : 2100);
+}
+
+function finishTutorial() {
+  tutorialStep = -1;
+  TUTORIAL_ACTIVE = false;
+  const bar = document.getElementById("tutorBar");
+  bar.classList.remove("hidden");
+  bar.innerHTML = `<div class="tutorhead"><b>You know how to play.</b></div>`
+    + `<div class="tutortext">Everything else — the colours your gear binds, tier `
+    + `pieces, spells — is built on those four moves. Pick a build and go.`
+    + `<div class="logbtns" style="max-width:320px;margin:10px 0 0">`
+    + `<button id="tutorDone" style="font-weight:700">Pick a build →</button></div></div>`;
+  document.getElementById("tutorDone").onclick = () => location.reload();
+}
+
+function startTutorial() {
+  TUTORIAL_ACTIVE = true;
+  // A deliberately plain build: one damage colour, no mana, no spells, nothing
+  // to explain that the five steps do not cover.
+  begin({ R: "attack", G: "block", Y: "splash", B: "armour", line4: "cleave",
+          hardL: "stun", hardT: "dodge", spells: [] }, null, true);
+  armTutorialStep(0);
+}
+
+function begin(picksArg, setKeys, tutorial) {
   loadout = buildLoadout(picksArg, setKeys);
   player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
              shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0,
@@ -3727,6 +4004,7 @@ function begin(picksArg, setKeys) {
              sharpenStacks: 0,             // Yellow "sharpen" -- banked, consumed whole by the next attack/bleed/splash
              focusStacks: 0 };             // Blue/Yellow "focus" -- banked, consumed whole by the next manual spell cast
   encounter = 0;
+  tutorialStep = tutorial ? 0 : -1;
   document.getElementById("setup").classList.add("hidden");
   document.getElementById("game").classList.remove("hidden");
   bindBoard();
@@ -4053,6 +4331,12 @@ function setReducedFx(on, persist) {
     };
   });
 })();
+
+document.getElementById("tutorialBtn").onclick = () => startTutorial();
+document.getElementById("jumpBtn").onclick = () => {
+  document.getElementById("presetCards").scrollIntoView(
+    { behavior: "smooth", block: "start" });
+};
 
 document.getElementById("beginBtn").onclick = () => {
   if (allSocketsFilled() && spellbookFilled()) begin(picks, [pickedSet1, pickedSet2]);
