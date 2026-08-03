@@ -705,7 +705,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03i";
+const GAME_VERSION = "2026-08-03j";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -3360,6 +3360,25 @@ function cellFromEvent(ev) {
 
 async function attemptSwap(r1, c1, r2, c2) {
   if (busy || swipes <= 0) return;
+
+  /* In a lesson, only the move being taught is accepted. Everything else
+     snaps back for free, exactly like a swap that makes no match.
+
+     This has to be enforced here rather than built into the board, because
+     the board CANNOT express it. A board one swap from a 4-chain necessarily
+     has a gap, and the gem on the far side of that gap can always slide in
+     sideways to make a plain 3 instead -- middle gap, end gap, horizontal or
+     vertical, the mirror move is always there. Step 2 shipped with that spare
+     move for exactly that reason. Refusing it is the only way to guarantee
+     the player learns the shape the step is actually about. */
+  if (tutorialStep >= 0 && tutorialIntent && tutorialIntent.move) {
+    const want = tutorialIntent.move;
+    if (`${r1},${c1},${r2},${c2}` !== want && `${r2},${c2},${r1},${c1}` !== want) {
+      render(true);          // nothing was swapped, so nothing to undo
+      return;
+    }
+  }
+
   busy = true;
   document.getElementById("board").classList.add("resolving");
   swapCells(r1, c1, r2, c2);
@@ -4006,7 +4025,8 @@ function legalMoveKeys() {
    put two reds beside a red the background had already placed, which made a
    match before the player touched anything. Only checking against the real
    matcher catches that, so that is what this does. */
-function restrictToMove(intended) {
+function restrictToMove(intent) {
+  const move = intent && intent.move;
   const fixed = board.fixedCells || new Set();
   const isFiller = (r, c) => !fixed.has(key(r, c)) && !special[r][c];
   const recolour = (r, c) => {
@@ -4021,10 +4041,34 @@ function restrictToMove(intended) {
     return true;
   };
 
-  // With a checkerboard background this should need zero passes -- it is kept
-  // as a guard so a future edit to a template fails safe rather than silently
-  // giving the player a second thing to click.
-  for (let guard = 0; guard < 40; guard++) {
+  // Kill one unwanted move by repainting a filler cell. If neither swapped
+  // cell is filler -- both belong to the lesson -- the match it would make
+  // still runs through filler, so make the swap, look at what it matched, and
+  // repaint a filler cell inside THAT. Without this second route the function
+  // gave up on such a move and reported success anyway, which is how step 2
+  // shipped with a spare swap that formed a line3 instead of the chain gem it
+  // was teaching.
+  const suppress = (mv) => {
+    const [r, c, r2, c2] = mv.split(",").map(Number);
+    const candidates = [];
+    if (isFiller(r, c)) candidates.push([r, c]);
+    if (isFiller(r2, c2)) candidates.push([r2, c2]);
+    swapCells(r, c, r2, c2);
+    for (const m of findMatches(board))
+      for (const [y, x] of m.cells) if (isFiller(y, x)) candidates.push([y, x]);
+    swapCells(r, c, r2, c2);
+    for (const [y, x] of candidates) {
+      const was = board[y][x];
+      for (const alt of COLORS.filter(z => z !== was)) {
+        board[y][x] = alt;
+        if (!findMatches(board).length && !legalMoveKeys().includes(mv)) return true;
+      }
+      board[y][x] = was;
+    }
+    return false;
+  };
+
+  for (let guard = 0; guard < 60; guard++) {
     const ms = findMatches(board);
     if (ms.length) {                       // a match at rest -- always wrong
       const cell = ms[0].cells.find(([r, c]) => isFiller(r, c));
@@ -4032,30 +4076,60 @@ function restrictToMove(intended) {
       recolour(cell[0], cell[1]);
       continue;
     }
-    const extra = legalMoveKeys().filter(k => k !== intended);
-    if (!extra.length) return true;
+    const extra = legalMoveKeys().filter(k => k !== move);
+    if (!extra.length) break;
     // Work through EVERY offending move this pass. Bailing out on the first
     // one that resists leaves all the others in place, which is what happened
     // when this stopped at a break -- boards still offered four to eight
     // unintended moves.
     let progress = false;
-    for (const move of extra) {
-      const [r, c, r2, c2] = move.split(",").map(Number);
-      const target = isFiller(r, c) ? [r, c] : (isFiller(r2, c2) ? [r2, c2] : null);
-      if (!target) continue;
-      const was = board[target[0]][target[1]];
-      for (const alt of COLORS.filter(x => x !== was)) {
-        board[target[0]][target[1]] = alt;
-        if (!findMatches(board).length && !legalMoveKeys().includes(move)) {
-          progress = true; break;
-        }
-        board[target[0]][target[1]] = was;
-      }
-      if (progress) break;
-    }
+    for (const mv of extra) if (suppress(mv)) { progress = true; break; }
     if (!progress) break;
   }
-  return findMatches(board).length === 0;
+  tutorialIntent = intent;
+  tutorialIntentError = checkIntent(intent);
+  return tutorialIntentError;
+}
+
+/* Says whether the board really is what the lesson claims, as a sentence, or
+   null if it is. Three separate promises, each of which has been broken at
+   least once: nothing matches at rest, the intended swap is the ONLY thing
+   the player can do, and that swap makes the specific shape being taught.
+   The third was never checked at all -- a step could teach "an L clears its
+   column" while its one legal move quietly made something else. */
+function checkIntent(intent) {
+  if (findMatches(board).length) return "the board already has a match at rest";
+  const legal = legalMoveKeys();
+  if (!intent || !intent.move) {
+    return legal.length ? `expected no legal move, found ${legal.length}` : null;
+  }
+  if (!legal.includes(intent.move))
+    return `the taught move ${intent.move} is not legal`;
+  /* Deliberately NOT an error when other moves remain legal. restrictToMove
+     removes what it can, but a 4-chain lesson always leaves one sideways slide
+     that makes a 3 (see attemptSwap), so demanding a board with a single legal
+     move would be demanding something unbuildable. attemptSwap refuses
+     everything but the taught move; that is where uniqueness is guaranteed,
+     and the browser checks test it there by trying the other moves. */
+
+  const [r, c, r2, c2] = intent.move.split(",").map(Number);
+  if (intent.forms === "fusion") {
+    return special[r][c] && special[r2][c2] ? null
+      : "the taught move is not a fusion -- both cells need a chain gem";
+  }
+  swapCells(r, c, r2, c2);
+  const ms = findMatches(board);
+  const shapes = ms.map(m => m.shape);
+  // A chain gem is only set off by being caught in a match, so ask what the
+  // match actually covers rather than trusting the gem sitting next to it.
+  const setOff = ms.flatMap(m => m.cells.map(([y, x]) => special[y][x]).filter(Boolean));
+  swapCells(r, c, r2, c2);
+
+  if (intent.forms && !shapes.includes(intent.forms))
+    return `the taught move forms ${shapes.join("+") || "nothing"}, not ${intent.forms}`;
+  if (intent.detonates && !setOff.includes(intent.detonates))
+    return `the taught move sets off ${setOff.join("+") || "nothing"}, not ${intent.detonates}`;
+  return null;
 }
 
 let tutorialStep = -1;   // -1 = not in the tutorial
@@ -4077,7 +4151,7 @@ const TUTORIAL = [
         "........", "........", "........",
       ]);
       special = emptySpecials();
-      restrictToMove("3,3,4,3");
+      restrictToMove({ move: "3,3,4,3", forms: "line3" });
     },
     done: () => (stats.shapes.line3 || 0) > (tutorialMark.line3 || 0),
     cheer: "Three is the smallest match, and it pays out immediately.",
@@ -4095,7 +4169,7 @@ const TUTORIAL = [
         "........", "........", "........",
       ]);
       special = emptySpecials();
-      restrictToMove("3,3,4,3");
+      restrictToMove({ move: "3,3,4,3", forms: "line4" });
     },
     done: () => stats.specials > (tutorialMark.specials || 0),
     cheer: "That <b>4</b> is stored power. It does nothing sitting there.",
@@ -4115,7 +4189,7 @@ const TUTORIAL = [
       ]);
       special = emptySpecials();
       special[4][4] = "line4";
-      restrictToMove("3,6,4,6");
+      restrictToMove({ move: "3,6,4,6", forms: "line3", detonates: "line4" });
     },
     done: () => stats.detonations > (tutorialMark.detonations || 0),
     cheer: "That is where damage really comes from — building something, then "
@@ -4135,7 +4209,7 @@ const TUTORIAL = [
       ]);
       special = emptySpecials();
       special[4][4] = "L";
-      restrictToMove("3,6,4,6");
+      restrictToMove({ move: "3,6,4,6", forms: "line3", detonates: "L" });
     },
     done: () => stats.detonations > (tutorialMark.detonations || 0),
     cheer: "Row for a <b>4</b>, column for an <b>L</b>. Same move, different cut.",
@@ -4153,7 +4227,7 @@ const TUTORIAL = [
       ]);
       special = emptySpecials();
       special[4][4] = "T";
-      restrictToMove("3,6,4,6");
+      restrictToMove({ move: "3,6,4,6", forms: "line3", detonates: "T" });
     },
     done: () => stats.detonations > (tutorialMark.detonations || 0),
     cheer: "4 = row. L = column. T = both. That is the whole language.",
@@ -4168,7 +4242,7 @@ const TUTORIAL = [
                       "........", "........", "........", "........"]);
       special = emptySpecials();
       special[4][3] = "line4"; special[4][4] = "line4";
-      restrictToMove("4,3,4,4");     // the fusion is the only thing to do
+      restrictToMove({ move: "4,3,4,4", forms: "fusion" });   // the only thing to do
     },
     done: () => stats.fusions > (tutorialMark.fusions || 0),
     cheer: "Fusions are the big turns. Banking a chain gem instead of spending it "
@@ -4193,6 +4267,7 @@ const TUTORIAL = [
       ]);
       special = emptySpecials();
       special[4][4] = "L";
+      restrictToMove({ move: "3,6,4,6", forms: "line3", detonates: "L" });
     },
     done: () => enemies.some(e => e.stunned > 0),
     cheer: "A different build would fire something else there — bleed, a heal, a "
@@ -4223,6 +4298,13 @@ function swipesSpentThisStep() {
       || stats.fusions !== tutorialMark.fusions;
 }
 
+/* Why a lesson's board is wrong, or null. arm() calls restrictToMove(), which
+   leaves its verdict here; the browser checks read it back. A silent boolean
+   was not enough -- restrictToMove used to answer only "does the board match
+   at rest", so a step could ship offering a second swap and nothing noticed. */
+let tutorialIntentError = null;
+let tutorialIntent = null;      // what the armed lesson says its one move does
+
 function armTutorialStep(i) {
   tutorialStep = i;
   const step = TUTORIAL[i];
@@ -4230,6 +4312,8 @@ function armTutorialStep(i) {
     line3: stats.shapes.line3 || 0, specials: stats.specials,
     detonations: stats.detonations, fusions: stats.fusions, turns: stats.turns,
   };
+  tutorialIntentError = null;
+  tutorialIntent = null;
   step.arm();
   swipes = SWIPES_PER_TURN;
   renderTutorBar();
