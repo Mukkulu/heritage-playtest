@@ -708,7 +708,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-04a";
+const GAME_VERSION = "2026-08-04b";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -1095,11 +1095,12 @@ const SPELLS = {
   heal:    { cost: 60, label: "Heal",    note: "+15 health", beneficial: true },
   fire:    { cost: 50, label: "Fire",    note: "20 to one" },
   thunder: { cost: 90, label: "Thunder", note: "12 to all" },
-  gamble:  { cost: 80, label: "Gambler's Gambit", note: "next 3-match also leaves a random chain gem (4/L/T, or line5 at 10%)" },
+  gamble:  { cost: 80, label: "Gambler's Gambit", note: "next 3-match also leaves a random chain gem (4/L/T, or line5 at 10%)", beneficial: true },
   acid:    { cost: 75, label: "Acid Rain", note: `${ACID_DMG_PER_TURN} dmg/turn to every enemy, ${ACID_TURNS} turns; stacks` },
   freeze:  { cost: 55, label: "Freeze Blast", note: `1 freeze stack on every enemy; at ${FREEZE_STACKS_THRESHOLD} it stuns, ignoring resolve` },
   amplify: { cost: 55, label: "Damage Amplified",
-             note: `+${Math.round(DMG_AMP_PER_STACK * 100)}% damage this turn, stacks to +${Math.round(DMG_AMP_CAP * 100)}%` },
+             note: `+${Math.round(DMG_AMP_PER_STACK * 100)}% damage this turn, stacks to +${Math.round(DMG_AMP_CAP * 100)}%`,
+             beneficial: true },
   arcane_armor: { cost: 60, label: "Arcane Armor", note: `+${ARCANE_ARMOR_BLOCK} block`, beneficial: true },
   ethereal: { cost: 15, label: "Ethereal Defence",
               note: `-${Math.round(ETHEREAL_PER_STACK * 100)}% damage taken this turn, stacks to -${Math.round(ETHEREAL_CAP * 100)}%`,
@@ -1239,7 +1240,7 @@ const SETS = {
   },
   archmage: {
     name: "Archmage of Chaos",
-    twoPcBlurb: "blue does nothing on its own -- it builds wild charge. At 10 charges, a free random spell fires automatically at end of turn, benefiting from any banked spell buffs same as a manual cast. No mana cost, no aim -- a chaos-fired heal can land on an enemy instead of you",
+    twoPcBlurb: "blue does nothing on its own -- it builds wild charge. At 10 charges, a free spell fires automatically at end of turn, rolled from EVERY spell in the game rather than the ones you picked, and benefiting from any banked spell buffs same as a manual cast. No mana cost, no aim -- a chaos-fired buff can land on an enemy instead of you",
     fourPcBlurb: "the wild-charge threshold drops to 5; every " + ARCHMAGE_DOUBLE_EVERY_NTH_CAST + "th wild-charge cast (lifetime) deals double; more than " + ARCHMAGE_DOUBLE_EVERY_NTH_CAST + " casts in one turn each risk a small chance to implode for " + ARCHMAGE_IMPLODE_DAMAGE + " to everything",
     twoPc: { colorOverrides: { B: null }, spells: ["heal", "fire", "thunder"], wildChargeColor: "B", wildChargeThreshold: 10 },
     fourPc: { wildChargeThreshold: 5, archmageOverload: true },
@@ -2729,6 +2730,20 @@ function availableSpells() {
   return loadout.spells || [];
 }
 
+/* What the Archmage's wild charge rolls: EVERY spell, not the book you
+   equipped (designer, 2026-08-04). Drawing from your own book made the set a
+   discount version of spells you had already chosen; the point is being handed
+   something you would never have picked. It also removes a failure mode -- an
+   empty spellbook used to bank the charges forever, so the set did nothing.
+
+   A function rather than an inline expression so the parity harness can
+   compare what the two engines would actually roll. Comparing "all spell
+   names" on both sides instead would pass no matter what the cast site did --
+   which is what the first version of that check did. */
+function wildChargePool() {
+  return Object.keys(SPELLS);
+}
+
 /* The actual effect of a spell, split out from cast() so an autonomous proc
    (Archmage of Chaos's wild charge) can fire one for free, bypassing mana
    /cost entirely. chaotic=true marks a proc-fired cast rather than a
@@ -2764,6 +2779,7 @@ function resolveSpellEffect(name, factor, chaotic) {
     return { text: `thunder hits everything for ${dmg}${boosted}`, cls: "hit" };
   }
   if (name === "gamble") {
+    if (misfire) return { text: "the gamble slips loose and comes to nothing", cls: "hit" };
     player.gambleNextLine3 = true;
     return { text: "the next 3-match is a gamble — it'll also leave a random chain gem", cls: "good" };
   }
@@ -2795,6 +2811,14 @@ function resolveSpellEffect(name, factor, chaotic) {
   }
   if (name === "amplify") {
     const max = Math.round(DMG_AMP_CAP / DMG_AMP_PER_STACK);
+    // Wasted rather than handed over, matching arcane armor -- an enemy that
+    // suddenly hits 3.5x harder is a far bigger punishment than the other
+    // misfires carry, and enemies have no damage-amp state to put it in.
+    if (misfire) {
+      const alive = living();
+      if (alive.length)
+        return { text: `the amplification wreathes ${pick(alive).name} instead — wasted`, cls: "hit" };
+    }
     if (player.dmgAmpStacks >= max)
       return { text: `damage amp already capped (+${Math.round(DMG_AMP_CAP * 100)}%)`, cls: "good" };
     player.dmgAmpStacks = Math.min(max, player.dmgAmpStacks + Math.max(1, Math.round(factor)));
@@ -2889,9 +2913,12 @@ async function endTurn() {
   }
 
   const threshold = loadout.wildChargeThreshold;
-  // A spellbook can now be EMPTY (no mana colour), and rolling a random spell
-  // out of nothing would be an outright crash -- bank the charges instead.
-  const wildPool = availableSpells();
+  /* CHAOS MEANS CHAOS: the wild charge rolls the WHOLE spell list, not the
+     spellbook you equipped (designer, 2026-08-04). Drawing from your own book
+     made the Archmage a discount version of the spells you had already chosen;
+     drawing from all of them is the point of the set, and it is the only way
+     to be handed something you would never have picked. */
+  const wildPool = wildChargePool();
   let castsThisTurn = 0;
   if (threshold && wildPool.length && player.wildCharges >= threshold) {
     let fires = Math.floor(player.wildCharges / threshold);
