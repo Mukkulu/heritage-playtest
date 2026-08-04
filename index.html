@@ -291,6 +291,9 @@
   .gem.X { background-color: var(--X); background-image: url(graphics/voidgem.png); }
   .gem.sel { box-shadow: 0 0 0 3px #fff inset; transform: scale(.88); }
   .gem.adj { box-shadow: 0 0 0 2px rgba(255,255,255,.35) inset; }
+  /* The neighbour you are currently dragging onto. Since the swap now waits
+     for release, this is the gem you would swap with if you let go now. */
+  .gem.dragto { box-shadow: 0 0 0 3px #ffd76e inset; transform: scale(.94); }
   .gem.willmatch { box-shadow: 0 0 0 3px #fff inset; }
   .gem.willfuse { box-shadow: 0 0 0 3px #d9a3f2 inset; }
   /* Predicted result of this one swap. No cascades -- only what's certain. */
@@ -705,7 +708,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-03k";
+const GAME_VERSION = "2026-08-04a";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -3363,6 +3366,12 @@ function finish(won) {
 
 let selected = null;   // persistent click-selection
 let pressAt = null;    // where a pointer went down, for drag detection
+/* A drag in progress. Dragging used to swap the moment the pointer crossed
+   into a neighbour, which meant a swipe committed before you let go and there
+   was no way to change your mind or back out. The swap now happens on RELEASE;
+   these two only drive the preview while the pointer is still down. */
+let dragFrom = null;   // the gem being held
+let dragTo = null;     // the neighbour it would swap with if released now
 
 const adjacent = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) === 1;
 
@@ -3474,44 +3483,72 @@ async function attemptSwap(r1, c1, r2, c2) {
 function bindBoard() {
   const el = document.getElementById("board");
 
+  const clearDrag = () => { pressAt = null; dragFrom = null; dragTo = null; };
+
   el.addEventListener("pointerdown", ev => {
     if (busy) return;
     pressAt = cellFromEvent(ev);
-    if (pressAt) ev.preventDefault();
+    dragFrom = null; dragTo = null;
+    if (pressAt) {
+      ev.preventDefault();
+      /* Capture the pointer so the release lands here even if the finger has
+         wandered off the board by then. It did not matter while the swap
+         happened on pointermove; now that it waits for pointerup, a drag that
+         ends outside the grid would otherwise never resolve and would leave
+         the gem stuck down. */
+      try { el.setPointerCapture(ev.pointerId); } catch { /* not supported */ }
+    }
   });
 
-  // Dragging across a boundary swaps immediately, without waiting for release.
+  /* Dragging only PREVIEWS. It shows the gem you are holding and which
+     neighbour you would swap with, and commits nothing until you let go. */
   el.addEventListener("pointermove", ev => {
     if (!pressAt || busy) return;
     const to = cellFromEvent(ev);
-    if (!to || !adjacent(pressAt, to)) return;
-    const from = pressAt;
-    pressAt = null; selected = null;
+    if (!to) return;
+    const moved = to[0] !== pressAt[0] || to[1] !== pressAt[1];
+    const next = moved && adjacent(pressAt, to) ? to : null;
+    // Re-render only when the target actually changes -- a move event fires
+    // far too often to rebuild all 64 cells each time.
+    const was = dragTo ? key(dragTo[0], dragTo[1]) : -1;
+    const now = next ? key(next[0], next[1]) : -1;
+    if (was === now && !!dragFrom === moved) return;
+    dragFrom = moved ? pressAt : null;
+    dragTo = next;
     render();
-    attemptSwap(from[0], from[1], to[0], to[1]);
   });
 
-  // A press and release on the same cell is a click, not a drag.
   el.addEventListener("pointerup", ev => {
-    if (busy) { pressAt = null; return; }
+    if (busy) { clearDrag(); return; }
     const up = cellFromEvent(ev);
     const down = pressAt;
-    pressAt = null;
-    if (!up || !down || up[0] !== down[0] || up[1] !== down[1]) { render(); return; }
+    clearDrag();
+    if (!up || !down) { render(); return; }
 
-    if (!selected) selected = up;                                  // pick one up
-    else if (selected[0] === up[0] && selected[1] === up[1]) selected = null;   // put it back
-    else if (adjacent(selected, up)) {
-      const from = selected;
+    // Released on a neighbour of the gem you picked up -- that is the swipe.
+    if (adjacent(down, up)) {
       selected = null;
       render();
-      attemptSwap(from[0], from[1], up[0], up[1]);
+      attemptSwap(down[0], down[1], up[0], up[1]);
       return;
-    } else selected = up;                                          // switch selection
-    render();
+    }
+
+    // Released where it started: a tap, which selects rather than swiping.
+    if (up[0] === down[0] && up[1] === down[1]) {
+      if (!selected) selected = up;                                // pick one up
+      else if (selected[0] === up[0] && selected[1] === up[1]) selected = null;  // put it back
+      else if (adjacent(selected, up)) {
+        const from = selected;
+        selected = null;
+        render();
+        attemptSwap(from[0], from[1], up[0], up[1]);
+        return;
+      } else selected = up;                                        // switch selection
+    }
+    render();   // released somewhere unrelated -- nothing happens
   });
 
-  el.addEventListener("pointercancel", () => { pressAt = null; render(); });
+  el.addEventListener("pointercancel", () => { clearDrag(); render(); });
 }
 
 /* ============================ render ============================ */
@@ -3753,11 +3790,15 @@ function render(fresh) {
     const d = document.createElement("div");
     d.className = "gem " + board[r][c];
     if (special[r][c]) d.classList.add("spec");
-    if (selected) {
-      if (selected[0] === r && selected[1] === c) d.classList.add("sel");
-      else if (adjacent(selected, [r, c])) {
+    /* A held gem previews exactly like a selected one, so dragging shows what
+       the swipe would do before you commit to it. */
+    const hi = dragFrom || selected;
+    if (dragTo && dragTo[0] === r && dragTo[1] === c) d.classList.add("dragto");
+    if (hi) {
+      if (hi[0] === r && hi[1] === c) d.classList.add("sel");
+      else if (adjacent(hi, [r, c])) {
         d.classList.add("adj");
-        const p = previewSwap(selected[0], selected[1], r, c);
+        const p = previewSwap(hi[0], hi[1], r, c);
         if (p) {
           d.classList.add(p.fuse ? "willfuse" : "willmatch");
           const tip = document.createElement("span");
@@ -4159,7 +4200,7 @@ let tutorialMark = {};   // counters snapshotted when a step is armed
 const TUTORIAL = [
   {
     title: "Swap two gems to line up three",
-    text: "Drag a gem onto a neighbour — or tap one, then the other. Line up "
+    text: "Drag a gem onto a neighbour and let go — or tap one, then the other. Line up "
         + "<b>three of the same colour</b> and they clear.<br>"
         + "<span class='dim'>Only one swap on this board does anything. A swap that "
         + "makes no match just snaps back and costs you nothing.</span>",
