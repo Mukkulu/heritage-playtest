@@ -709,7 +709,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-08a";
+const GAME_VERSION = "2026-08-08b";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -945,16 +945,26 @@ const CASCADE_GUARD = 60;
 
    VOID never kills by attrition: its self-hit always leaves you on at least 1
    health, however long the cascade runs. What it CAN do is kill outright, if a
-   single swipe matches this many void gems. Death by void is a cliff, not a
+   single TURN matches this many void gems. Death by void is a cliff, not a
    slope -- you cannot be whittled away by a mechanic you chose, but a board
    that has genuinely run away takes you with it.
 
-   250 is calibrated, not guessed. Across 864 simulated swipes on the runaway
-   loadout the median swipe matches 0 void gems, the 75th percentile 19, and the
-   90th 246 -- so this sits right at the shoulder where a swipe stops being big
-   and starts being uncontrolled. The submitted run that prompted the rule had a
-   worst single swipe of 505, which it would have killed. */
-const VOID_LETHAL_MATCHES = 250;
+   Per TURN, not per swipe (changed 2026-08-08b at the designer's call, along
+   with 250 -> 500). The unit matters as much as the number: a turn accumulates
+   across all three swipes, so the rule now reads "the void took over this
+   turn" rather than "one cascade got lucky", which is the thing actually worth
+   dying to.
+
+   500 is calibrated against every logged run that carries a digest:
+
+     run          worst turn   worst swipe   verdict at 500/turn
+     2026-08-07d        572          505     dies -- the genuine runaway
+     2026-08-08a        318          269     survives -- "took over a little
+                                             too fast" at the old 250/swipe
+     2026-08-07e        113          113     never close, over 20 turns
+
+   So it kills the run that ran away and spares the one that merely got big. */
+const VOID_LETHAL_MATCHES = 500;
 
 const MINOR_VOID_GEM_SPAWN = 3;    // Minor "spawn 3 void gems"
 const MAJOR_MANA_RESTORE = 50;     // Major "restore 50 mana"
@@ -1574,6 +1584,9 @@ let triggerRepeat = 1;  // Power "swipe_multiplier" -- SWIPE_MULT_TRIGGER_COUNT 
    away. Never by a blast: chain-gem explosions are the one thing that clears
    voids for good, which is the player's only lever on the population. */
 let voidsPending = 0;
+/* Void gems matched during the TURN now resolving -- the lethal threshold is
+   per turn, so this outlives any one swipe. Reset in endTurn. */
+let voidsMatchedThisTurn = 0;
 /* Which turn of the CURRENT encounter is being played, 1-based. Only the
    warm-up ramp reads it (see rampedDamage), and it advances at the very end
    of endTurn so the telegraph and the hit it describes never disagree. */
@@ -2862,8 +2875,9 @@ async function resolveBoard() {
     /* The cliff. Checked here, mid-cascade, so it fires the moment the swipe
        crosses the line rather than after the board has finished unravelling --
        the player should see WHICH cascade step killed them. */
-    if (swipeTally && swipeTally.voidMatched >= VOID_LETHAL_MATCHES && player.hp > 0) {
-      log(`THE VOID TAKES YOU -- ${swipeTally.voidMatched} void gems matched in one swipe `
+    voidsMatchedThisTurn += matchedVoids;
+    if (voidsMatchedThisTurn >= VOID_LETHAL_MATCHES && player.hp > 0) {
+      log(`THE VOID TAKES YOU -- ${voidsMatchedThisTurn} void gems matched this turn `
         + `(the limit is ${VOID_LETHAL_MATCHES})`, "hit");
       player.hp = 0;
       break;
@@ -3300,6 +3314,7 @@ async function endTurn() {
 
   if (player.phantomBladeTurns > 0) player.phantomBladeTurns--;
   encTurn++;   // this encounter's turn is now fully resolved -- see rampedDamage
+  voidsMatchedThisTurn = 0;   // the void cliff is measured per turn
 
   checkAceOfClubs();  // locusts/wild-charge/bleed/acid/thorns could all have just killed something
 
@@ -3521,8 +3536,11 @@ function buildReport() {
   if (voidSelf) {
     L.push(`  void self-damage ${voidSelf}   <- GROSS. "damage taken" above is net of healing,`
            + ` so a build that heals can be paying far more for the void than it looks`);
-    const worstVoid = stats.swipes.reduce((a, s) => Math.max(a, s.voidMatched), 0);
-    L.push(`  worst void swipe ${worstVoid} gems matched   <- ${VOID_LETHAL_MATCHES} in one swipe kills outright;`
+    const byTurnVoid = {};
+    for (const sw of stats.swipes)
+      byTurnVoid[sw.turn] = (byTurnVoid[sw.turn] || 0) + sw.voidMatched;
+    const worstVoid = Math.max(0, ...Object.values(byTurnVoid));
+    L.push(`  worst void turn  ${worstVoid} gems matched   <- ${VOID_LETHAL_MATCHES} in one TURN kills outright;`
            + ` the self-hit alone never can, it holds you at 1`);
   }
   if (stats.ampPeak || stats.etherealPeak)
@@ -4234,9 +4252,9 @@ function render(fresh) {
   /* Live during the cascade, because render() runs between cascade steps --
      the number climbs while the board unravels, which is the only warning a
      player gets before the cliff. */
-  if (swipeTally && swipeTally.voidMatched)
-    buffs.push(`VOID THIS SWIPE ${swipeTally.voidMatched}/${VOID_LETHAL_MATCHES}`
-      + (swipeTally.voidMatched >= VOID_LETHAL_MATCHES * 0.6 ? " -- DANGER" : ""));
+  if (voidsMatchedThisTurn)
+    buffs.push(`VOID THIS TURN ${voidsMatchedThisTurn}/${VOID_LETHAL_MATCHES}`
+      + (voidsMatchedThisTurn >= VOID_LETHAL_MATCHES * 0.6 ? " -- DANGER" : ""));
   if (player.gambleNextLine3) buffs.push("NEXT 3-MATCH IS A GAMBLE");
   if (player.sharpenStacks) buffs.push(`SHARPEN ${player.sharpenStacks}/${SHARPEN_MAX_STACKS} (+${player.sharpenStacks * Math.round(SHARPEN_PCT_PER_STACK * 100)}% next hit)`);
   // Focus was the one banking mechanic with no buff readout at all -- a
@@ -4338,6 +4356,7 @@ function startEncounter() {
   player.deathmarkActive = false;
   player.deathmarkGrace = 0;
   encTurn = 1;
+  voidsMatchedThisTurn = 0;
   player.tactician2pcUsedThisTurn = 0;
   player.tactician4pcUsedThisTurn = 0;
   player.gambleNextLine3 = false;
