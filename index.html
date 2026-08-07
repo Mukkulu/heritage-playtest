@@ -709,7 +709,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-08c";
+const GAME_VERSION = "2026-08-08d";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -1053,6 +1053,9 @@ const EFFECT_ICON = {
   attack: "✖", bleed: "≈", block: "▣", mana: "◆", splash: "∴",
   armour: "▲", lifesteal: "♥", wild_charge: "✦", sharpen: "⚔",
   execute: "†", focus: "❋",
+  // Not a socketable effect -- what effectLabel reports for blue once Void's
+  // Gift has taken it over, so the legend has an icon to draw.
+  void: "☠",
 };
 // Seeded gems (see SEEDED_GEMS) aren't bound to loadout.colors at all -- a
 // fixed icon per colour letter, looked up directly instead of through
@@ -1064,6 +1067,7 @@ const EFFECT_DESC = {
   block: "absorbs damage this turn only (half rate)",
   mana: "fuel for spells, carries across the fight",
   splash: "damage to every enemy except your target",
+  void: "blue is hijacked -- matching it spawns void gems instead of paying anything",
   armour: "absorbs damage and KEEPS across turns (third rate)",
   lifesteal: "heals you (half rate); past full it builds a shield instead",
   wild_charge: "no direct effect -- builds toward a free random spell",
@@ -1081,6 +1085,10 @@ const EFFECT_DESC = {
 // bonus (Archmage's wild charge) claims a colour with no ordinary effect at
 // all. Returns null only for genuine inert rubble.
 function effectLabel(l, c) {
+  // Blue reads as "void" on a Void's Gift build, because that is what it does:
+  // the socket you picked is overridden, and a legend still showing it would
+  // be describing a payout that never arrives.
+  if (c === "B" && l.voidGift2pc) return "void";
   return l.colors[c] || (c === l.wildChargeColor ? "wild_charge" : null);
 }
 const TRIGGER_DESC = {
@@ -1348,11 +1356,18 @@ const SETS = {
   },
   voidsGift: {
     name: "Void's Gift",
-    twoPcBlurb: "every blue gem you match spawns a void gem, one for one, as the match happens -- a fifth, colourless gem that pays double a normal hit when matched. Void costs you real health: its toll is DIRECT, ignoring block, armour and shield alike",
+    twoPcBlurb: "BLUE BELONGS TO THE VOID. Whatever you socket into blue does nothing -- matching blue spawns void gems instead, one for one. Void is a fifth, colourless gem paying double a normal hit when matched, and its toll on you is DIRECT, ignoring block, armour and shield alike",
     fourPcBlurb: "every point the void takes out of you comes straight back as "
       + "block. It still costs the health -- the toll ignores your defences -- but the "
       + "set turns that cost into a shield for the enemy turn",
-    twoPc: { voidGift2pc: true },
+    /* colorOverrides B:null is what actually hijacks blue -- the same
+       mechanism Archmage uses. Doing it here rather than with a special case
+       at the match site means blue is gone from `loadout.colors` everywhere at
+       once: it pays no effect, it stops counting toward spellbook slots if it
+       was mana, and the setup screen already knows how to show an overridden
+       socket. A branch at the match site would have suppressed the payout and
+       left blue silently earning spell slots it no longer feeds. */
+    twoPc: { voidGift2pc: true, colorOverrides: { B: null } },
     fourPc: { voidGift4pc: true },
   },
   ace: {
@@ -2834,15 +2849,18 @@ async function resolveBoard() {
         if (color === loadout.locustColor) player.locusts += cells.length;
         if (color === loadout.wildChargeColor) { player.wildCharges += cells.length; addTurnTotal(color, cells.length); }
 
-        // Void's Gift 2pc: every blue gem matched grants a void gem, one for
-        // one -- independent of whatever blue is actually bound to. (Was one
-        // per THREE blue until 2026-08-07b; a five-blue match paying a single
-        // gem read as broken to every tester who tried it, and the set's
-        // whole promise is that blue feeds the void.) Owed here, placed at
-        // the end of this cascade step -- see placePendingVoids.
+        /* Void's Gift 2pc: blue is HIJACKED. Matching blue spawns void gems
+           one for one and pays nothing else -- not the effect you socketed
+           into it, not anything.
+
+           This is the set's original intent, finally implemented (2026-08-08d).
+           Before, blue paid its own effect AND spawned void, so the set was a
+           free rider on whatever blue already did rather than a trade. Void
+           has to be worth a colour to be worth choosing, and it cannot be
+           worth a colour while it costs nothing to take. */
         if (color === "B" && loadout.voidGift2pc && cells.length) {
           voidsPending += cells.length;
-          log(`${tag}: Void's Gift grants ${cells.length} void gem(s)`, "spec");
+          log(`${tag}: blue belongs to the void -- ${cells.length} void gem(s)`, "spec");
         }
 
         const effect = loadout.colors[color];
