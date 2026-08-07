@@ -709,7 +709,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-08b";
+const GAME_VERSION = "2026-08-08c";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -1348,11 +1348,10 @@ const SETS = {
   },
   voidsGift: {
     name: "Void's Gift",
-    twoPcBlurb: "every blue gem you match spawns a void gem, one for one, as the match happens -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too",
-    fourPcBlurb: "matching a void gem puts it straight back, one for one, so cashing "
-      + "them in never thins them out. A chain gem's EXPLOSION is the only thing that "
-      + "clears them for good -- that is your one lever on a board filling with void. "
-      + "Matching them also chips everything for 1 more",
+    twoPcBlurb: "every blue gem you match spawns a void gem, one for one, as the match happens -- a fifth, colourless gem that pays double a normal hit when matched. Void costs you real health: its toll is DIRECT, ignoring block, armour and shield alike",
+    fourPcBlurb: "every point the void takes out of you comes straight back as "
+      + "block. It still costs the health -- the toll ignores your defences -- but the "
+      + "set turns that cost into a shield for the enemy turn",
     twoPc: { voidGift2pc: true },
     fourPc: { voidGift4pc: true },
   },
@@ -2157,14 +2156,22 @@ function applySeededGem(color, gemCount, tag) {
     log(`${tag}: the void has nothing left to hit -- it tears at you for ${selfhit}`, "hit");
   }
 
-  if (loadout.voidGift4pc) {
-    /* 4pc: the replacement is not counted here. It is counted from the
-       MATCHED cells in resolveBoard, so that a void swept up by a chain
-       gem's explosion is not replaced -- see the split there. All that
-       belongs to the match itself is the flat chip on every living enemy. */
-    const alive = living();
-    for (const e of alive) dealDamage(e, 1);
-    if (alive.length) log(`${tag}: the void chips every enemy for 1`, "hit");
+  /* Baseline: the void chips every living enemy for a flat 1 on top of the
+     hit. Used to be the 4pc; it is what void does now. (The 1:1 replacement,
+     the other half of the old 4pc, is counted from the MATCHED cells in
+     resolveBoard so a void swept up by an explosion is not replaced.) */
+  const alive = living();
+  for (const e of alive) dealDamage(e, 1);
+  if (alive.length) log(`${tag}: the void chips every enemy for 1`, "hit");
+
+  /* 4pc, new in 2026-08-08c: what the void takes out of you comes back as
+     block. The gem still costs you real health -- the self-hit is direct and
+     ignores every defence -- but the set turns that cost into a shield for the
+     enemy turn, which is what lets a void build stand in front of a swarm
+     instead of only racing it. */
+  if (loadout.voidGift4pc && taken) {
+    player.block += taken;
+    log(`${tag}: the void's toll returns as ${taken} block`, "good");
   }
 }
 
@@ -2888,7 +2895,10 @@ async function resolveBoard() {
     const matchedCells = [...clear].map(k => [Math.floor(k / SIZE), k % SIZE]);
     const matchedVoids = matchedCells.filter(([r, c]) => board[r][c] === "X").length;
     if (swipeTally) swipeTally.voidMatched += matchedVoids;
-    if (loadout.voidGift4pc && matchedVoids) voidsPending += matchedVoids;
+    /* Baseline void behaviour since 2026-08-08c, not a set bonus: matching a
+       void gem always puts it back. A chain gem's explosion is still the only
+       thing that clears void for good. */
+    if (matchedVoids) voidsPending += matchedVoids;
     /* The cliff. Checked here, mid-cascade, so it fires the moment the swipe
        crosses the line rather than after the board has finished unravelling --
        the player should see WHICH cascade step killed them. */
