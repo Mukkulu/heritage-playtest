@@ -17,6 +17,11 @@
     --Y: #dfb13a;
     --B: #4a8ede;
     --X: #7b5ea7;
+    /* The hijacked socket. Void's Gift takes a colour over entirely, so the
+       gems in it stop being that colour and start being the void's -- see the
+       body.void-* rules below. Distinct from --X: this is still an ordinary
+       gem you match, not a void gem. */
+    --VOID-SLOT: #8e35c9;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -289,6 +294,16 @@
   .gem.Y { background-color: var(--Y); background-image: url(graphics/yellowgem.png); }
   .gem.B { background-color: var(--B); background-image: url(graphics/bluegem.png); }
   .gem.X { background-color: var(--X); background-image: url(graphics/voidgem.png); }
+  /* Whichever colour Void's Gift has hijacked wears the purple gem instead of
+     its own. The body carries `void-<letter>` only while that set is equipped,
+     so the same board renders normally for every other build. Matching it
+     spawns void and pays nothing, and a gem that still looked yellow would be
+     lying about that. */
+  body.void-R .gem.R, body.void-G .gem.G,
+  body.void-Y .gem.Y, body.void-B .gem.B {
+    background-color: var(--VOID-SLOT);
+    background-image: url(graphics/purplegem.png);
+  }
   .gem.sel { box-shadow: 0 0 0 3px #fff inset; transform: scale(.88); }
   .gem.adj { box-shadow: 0 0 0 2px rgba(255,255,255,.35) inset; }
   /* The neighbour you are currently dragging onto. Since the swap now waits
@@ -709,7 +724,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-08e";
+const GAME_VERSION = "2026-08-08f";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -4327,6 +4342,13 @@ function render(fresh) {
   // (2026-08-02). Every other banked resource is listed here.
   if (player.focusStacks) buffs.push(`FOCUS ${player.focusStacks}/${FOCUS_MAX_STACKS} (-${player.focusStacks * Math.round(FOCUS_PCT_PER_STACK * 100)}% next cast)`);
   q("buffs").innerHTML = buffs.map(b => `<div class="buff">${b}</div>`).join("");
+
+  // Recolour the hijacked socket. Done here rather than at build time because
+  // the loadout can be rebuilt mid-session from the setup screen, and a stale
+  // class would leave a purple gem on a build that has no void at all.
+  for (const c of COLORS)
+    document.body.classList.toggle("void-" + c,
+      c === VOID_COLOUR && !!loadout.voidGift2pc);
 
   q("spells").innerHTML = availableSpells().map(n => {
     // Show what THIS cast would actually charge -- free (banked
