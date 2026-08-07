@@ -708,7 +708,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-07b";
+const GAME_VERSION = "2026-08-07c";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -935,6 +935,11 @@ const ARCHMAGE_IMPLODE_DAMAGE = 30;        // 4pc: implode damage, hits every en
 const HEAL_LAST_TURN_FRAC = 0.7;   // Minor "heal 70% of health lost last turn"
 const MINOR_MANA_RESTORE = 25;     // Minor "restore 25 mana"
 const MINOR_HEAL_RESTORE = 10;     // Minor "restore 10 health"
+// Cascade steps one swipe may resolve before it is cut off. Only reachable
+// now that Void's Gift 4pc feeds matched gems back onto the board; a plain
+// refill has never come close.
+const CASCADE_GUARD = 60;
+
 const MINOR_VOID_GEM_SPAWN = 3;    // Minor "spawn 3 void gems"
 const MAJOR_MANA_RESTORE = 50;     // Major "restore 50 mana"
 const MAJOR_HEAL_RESTORE = 20;     // Major "restore 20 health"
@@ -1300,9 +1305,10 @@ const SETS = {
   },
   voidsGift: {
     name: "Void's Gift",
-    twoPcBlurb: "every blue gem you match spawns a void gem, one for one -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too",
-    fourPcBlurb: "every void gem a swipe destroys is put back when the board settles -- "
-      + "matched, blasted or detonated, the count never thins out. Only blue grows it. "
+    twoPcBlurb: "every blue gem you match spawns a void gem, one for one, as the match happens -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too",
+    fourPcBlurb: "matching a void gem puts it straight back, one for one, so cashing "
+      + "them in never thins them out. A chain gem's EXPLOSION is the only thing that "
+      + "clears them for good -- that is your one lever on a board filling with void. "
       + "Matching them also chips everything for 1 more",
     twoPc: { voidGift2pc: true },
     fourPc: { voidGift4pc: true },
@@ -1546,18 +1552,12 @@ let board, special, loadout;
 let player, enemies, targetIdx, encounter, swipes, busy = false;
 let valueMult = 1;  // Lchain/Tchain "double_next_swipe" -- 2 for one swipe's resolution, else 1
 let triggerRepeat = 1;  // Power "swipe_multiplier" -- SWIPE_MULT_TRIGGER_COUNT for one swipe, else 1
-/* Void's Gift 4pc: every void gem destroyed during one swipe, by any means.
-   Counted in collapse() rather than at the match, because a swipe destroys
-   voids three ways -- matching them, a special's blast sweeping them up, and a
-   fusion's detonation -- and only the first went through the match path. That
-   was the whole complaint: the population visibly thinned out on big turns,
-   which is exactly when the set is supposed to hold. collapse() is the one
-   chokepoint all three share. */
-let voidsLostThisSwipe = 0;
-/* Void gems GRANTED during one swipe -- by the 2pc's blue matches and by the
-   spawn_void_minor trigger. Placed at the settle for the same reason, see
-   settleVoidGems. */
-let voidsToSeedThisSwipe = 0;
+/* Void gems owed to the board, drained at the end of the CASCADE STEP that
+   earned them -- see placePendingVoids. Fed by the 2pc's blue matches, by the
+   spawn_void_minor trigger, and by the 4pc replacing voids that were matched
+   away. Never by a blast: chain-gem explosions are the one thing that clears
+   voids for good, which is the player's only lever on the population. */
+let voidsPending = 0;
 /* Which turn of the CURRENT encounter is being played, 1-based. Only the
    warm-up ramp reads it (see rampedDamage), and it advances at the very end
    of endTurn so the telegraph and the hit it describes never disagree. */
@@ -1721,7 +1721,6 @@ function findMatches(b) {
 
 function collapse(cells) {
   const cleared = new Set(cells.map(([r, c]) => key(r, c)));
-  for (const [r, c] of cells) if (board[r][c] === "X") voidsLostThisSwipe++;
   for (let c = 0; c < SIZE; c++) {
     const keepB = [], keepS = [];
     for (let r = 0; r < SIZE; r++) {
@@ -2037,27 +2036,22 @@ function seedGems(color, count, avoidExisting) {
   return placed;
 }
 
-/* EVERY void gem a swipe grants or replaces lands here, once, after the board
-   has stopped moving.
+/* Put the owed void gems on the board. Called at the end of each cascade
+   STEP, right after that step's collapse.
 
-   Nothing may seed mid-cascade. A gem placed during the cascade goes onto a
-   random cell -- including one of the cells that same cascade is about to
-   clear -- so it was destroyed in the very breath the log announced it: about
-   a 31% chance on a 20-cell clear. A tester reported matching five blue and
-   getting no void gem at all, on a run whose log says `seeds 1`. Both were
-   true. Settling makes the log's claim and the board agree, and it is what
-   makes the gems a position you can play into next swipe. */
-function settleVoidGems() {
-  if (voidsToSeedThisSwipe) {
-    const placed = seedGems("X", voidsToSeedThisSwipe, true);
-    if (placed) log(`${placed} void gem(s) settle onto the board`, "spec");
-    voidsToSeedThisSwipe = 0;
-  }
-  if (loadout.voidGift4pc && voidsLostThisSwipe) {
-    const placed = seedGems("X", voidsLostThisSwipe, true);
-    if (placed) log(`the void replaces itself -- ${placed} void gem(s) reseeded`, "spec");
-  }
-  voidsLostThisSwipe = 0;
+   Two constraints pull against each other here. Seeding *during* the match
+   loop puts the gem on a cell the same cascade is about to clear -- it dies in
+   the breath the log announced it, ~31% of the time on a 20-cell clear, which
+   is the bug a tester hit. Seeding once at the END of the whole swipe fixes
+   that but makes the gems arrive late, detached from the blue match that
+   earned them. Draining per cascade step satisfies both: the board has just
+   settled so nothing can eat them, and they appear while the swipe is still
+   resolving, where the next cascade can pick them up. */
+function placePendingVoids() {
+  if (!voidsPending) return;
+  const placed = seedGems("X", voidsPending, true);
+  if (placed) log(`the void spreads -- ${placed} void gem(s) appear`, "spec");
+  voidsPending = 0;
 }
 
 /* Void ('X') gem: a hardcoded effect, not bound to the player's own colour
@@ -2072,10 +2066,10 @@ function applySeededGem(color, gemCount, tag) {
     player.hp -= selfhit;
     log(`${tag}: void gem hits ${t.name} for ${value} (and you for ${selfhit})`, "hit");
     if (loadout.voidGift4pc) {
-      /* 4pc: the reseed itself is no longer done here. It is settled once per
-         swipe against every void lost by ANY route -- see voidsLostThisSwipe
-         and settleVoidGems(). All that belongs to the match is the flat chip
-         on every living enemy. */
+      /* 4pc: the replacement is not counted here. It is counted from the
+         MATCHED cells in resolveBoard, so that a void swept up by a chain
+         gem's explosion is not replaced -- see the split there. All that
+         belongs to the match itself is the flat chip on every living enemy. */
       for (const e of living()) dealDamage(e, 1);
       log(`${tag}: the void chips every enemy for 1`, "hit");
     }
@@ -2347,8 +2341,8 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor, fro
     player.hp += healed;
     log(`>> ${tag} TRIGGER: +${healed} health`, "good");
   } else if (trigger === "spawn_void_minor") {
-    // Granted now, placed at the settle -- see settleVoidGems.
-    voidsToSeedThisSwipe += MINOR_VOID_GEM_SPAWN;
+    // Owed now, placed at the end of this cascade step -- placePendingVoids.
+    voidsPending += MINOR_VOID_GEM_SPAWN;
     log(`>> ${tag} TRIGGER: spawns ${MINOR_VOID_GEM_SPAWN} void gem(s)`, "spec");
   } else if (trigger === "freeze") {
     if (t) applyFreeze(t, tag);
@@ -2709,6 +2703,16 @@ async function resolveBoard() {
   for (;;) {
     const matches = findMatches(board);
     if (!matches.length) break;
+    /* Until 2026-08-07c this loop could only end one way -- the refill stops
+       lining gems up -- and that was safe because nothing it did put gems
+       BACK. Void's Gift 4pc now does: matching voids replaces them, and the
+       replacements can line up and be matched in turn. The odds of that
+       running away are low and the cost of it happening is a hung tab, so it
+       gets the same treatment as the other two loops in this file. */
+    if (chain >= CASCADE_GUARD) {
+      log(`cascade guard: stopped after ${CASCADE_GUARD} steps`, "spec");
+      break;
+    }
     chain++;
     const clear = new Set();
     const fuse = [];
@@ -2735,10 +2739,10 @@ async function resolveBoard() {
         // one -- independent of whatever blue is actually bound to. (Was one
         // per THREE blue until 2026-08-07b; a five-blue match paying a single
         // gem read as broken to every tester who tried it, and the set's
-        // whole promise is that blue feeds the void.) Granted here, placed at
-        // the settle -- see settleVoidGems.
+        // whole promise is that blue feeds the void.) Owed here, placed at
+        // the end of this cascade step -- see placePendingVoids.
         if (color === "B" && loadout.voidGift2pc && cells.length) {
-          voidsToSeedThisSwipe += cells.length;
+          voidsPending += cells.length;
           log(`${tag}: Void's Gift grants ${cells.length} void gem(s)`, "spec");
         }
 
@@ -2784,7 +2788,16 @@ async function resolveBoard() {
     }
     // Keep the two kinds of destruction apart so the highlight can explain
     // itself: white = you matched this, gold = a special's blast swept it.
+    // The same split now carries a rule: a void gem you MATCHED comes back,
+    // a void gem a chain gem's explosion swept up does not. Explosions are
+    // the only thing that clears the void, and therefore the only lever a
+    // player has on a board that is filling up with it. Counted here, before
+    // detonateAll and collapse touch anything.
     const matchedCells = [...clear].map(k => [Math.floor(k / SIZE), k % SIZE]);
+    if (loadout.voidGift4pc) {
+      const matchedVoids = matchedCells.filter(([r, c]) => board[r][c] === "X").length;
+      if (matchedVoids) voidsPending += matchedVoids;
+    }
     const blastedCells = detonateAll(fuse);
     blastedCells.forEach(([r, c]) => clear.add(key(r, c)));
     const cells = [...clear].map(k => [Math.floor(k / SIZE), k % SIZE]);
@@ -2804,6 +2817,7 @@ async function resolveBoard() {
 
     // 3. REFILL.
     collapse(cells);
+    placePendingVoids();
     // The tutorial refills into an INERT pattern instead of random colours.
     // Random refill cascades, and a cascade turns "I made an L" into a chain of
     // unrelated matches ending in a line5 -- which is exactly what a tester
@@ -3604,8 +3618,7 @@ async function attemptSwap(r1, c1, r2, c2) {
     if (repeat > 1) { triggerRepeat = repeat; player.nextSwipeTriggerMult = 1; }
 
     let chain;
-    voidsLostThisSwipe = 0;
-    voidsToSeedThisSwipe = 0;
+    voidsPending = 0;
     if (fusing) {
       doFuse(r1, c1, r2, c2);
       /* doFuse collapses the board itself, OUTSIDE resolveBoard's loop, so
@@ -3621,7 +3634,7 @@ async function attemptSwap(r1, c1, r2, c2) {
       chain = await resolveBoard();
     }
 
-    settleVoidGems();
+    placePendingVoids();   // anything a fusion's own detonation left owing
     render(true);
 
     valueMult = 1;
