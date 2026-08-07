@@ -369,7 +369,7 @@
      go. Only the pulsing, the brightness ramps and the drop-in are dropped.
      The pacing is untouched, so cascades remain just as readable.
 
-     Default ON for anyone whose OS asks for reduced motion. */
+     ON by default; unchecking the box brings the flare back. */
   body.reduced-fx .gem.doomed,
   body.reduced-fx .gem.swept { animation: none; filter: none; }
   body.reduced-fx .gem.pop { animation: popQuiet .30s ease-out; }
@@ -572,9 +572,10 @@
     <div class="cards" id="presetCards"></div>
 
     <div class="fxrow">
-      <input type="checkbox" id="fxToggle">
+      <input type="checkbox" id="fxToggle" checked>
       <label for="fxToggle">Reduce flashing — stops gems pulsing and flaring while a match
-        resolves. Everything still shows what it is about to do.</label>
+        resolves. Everything still shows what it is about to do. On by default;
+        uncheck it if you want the full effect.</label>
     </div>
 
     <label class="advanced-toggle">
@@ -651,7 +652,7 @@
                so "this felt wrong" lands next to the thing that caused it
                rather than being reconstructed afterwards. -->
           <div class="fxrow" style="margin:0 0 8px">
-            <input type="checkbox" id="fxToggleGame">
+            <input type="checkbox" id="fxToggleGame" checked>
             <label for="fxToggleGame">Reduce flashing</label>
           </div>
           <div class="notebox">
@@ -708,7 +709,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-07e";
+const GAME_VERSION = "2026-08-08a";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -939,6 +940,21 @@ const MINOR_HEAL_RESTORE = 10;     // Minor "restore 10 health"
 // now that Void's Gift 4pc feeds matched gems back onto the board; a plain
 // refill has never come close.
 const CASCADE_GUARD = 60;
+
+/* The void's two-sided bargain.
+
+   VOID never kills by attrition: its self-hit always leaves you on at least 1
+   health, however long the cascade runs. What it CAN do is kill outright, if a
+   single swipe matches this many void gems. Death by void is a cliff, not a
+   slope -- you cannot be whittled away by a mechanic you chose, but a board
+   that has genuinely run away takes you with it.
+
+   250 is calibrated, not guessed. Across 864 simulated swipes on the runaway
+   loadout the median swipe matches 0 void gems, the 75th percentile 19, and the
+   90th 246 -- so this sits right at the shoulder where a swipe stops being big
+   and starts being uncontrolled. The submitted run that prompted the rule had a
+   worst single swipe of 505, which it would have killed. */
+const VOID_LETHAL_MATCHES = 250;
 
 const MINOR_VOID_GEM_SPAWN = 3;    // Minor "spawn 3 void gems"
 const MAJOR_MANA_RESTORE = 50;     // Major "restore 50 mana"
@@ -2097,8 +2113,12 @@ function applySeededGem(color, gemCount, tag) {
      It is also charged on `value` rather than on the damage actually dealt, so
      it does not quietly shrink when the target is nearly dead. */
   const selfhit = Math.max(1, Math.floor(value * VOID_SELFHIT_FRAC));
-  player.hp -= selfhit;
-  if (swipeTally) swipeTally.selfDmg += selfhit;
+  // The void cannot finish you by attrition -- it holds you at 1 and waits.
+  const taken = Math.max(0, Math.min(selfhit, player.hp - 1));
+  player.hp -= taken;
+  if (swipeTally) swipeTally.selfDmg += taken;
+  if (taken < selfhit)
+    log(`${tag}: the void draws ${selfhit} but cannot kill you -- held at 1 health`, "good");
 
   if (t) {
     dealDamage(t, value);
@@ -2839,6 +2859,15 @@ async function resolveBoard() {
     const matchedVoids = matchedCells.filter(([r, c]) => board[r][c] === "X").length;
     if (swipeTally) swipeTally.voidMatched += matchedVoids;
     if (loadout.voidGift4pc && matchedVoids) voidsPending += matchedVoids;
+    /* The cliff. Checked here, mid-cascade, so it fires the moment the swipe
+       crosses the line rather than after the board has finished unravelling --
+       the player should see WHICH cascade step killed them. */
+    if (swipeTally && swipeTally.voidMatched >= VOID_LETHAL_MATCHES && player.hp > 0) {
+      log(`THE VOID TAKES YOU -- ${swipeTally.voidMatched} void gems matched in one swipe `
+        + `(the limit is ${VOID_LETHAL_MATCHES})`, "hit");
+      player.hp = 0;
+      break;
+    }
     const blastedCells = detonateAll(fuse);
     blastedCells.forEach(([r, c]) => clear.add(key(r, c)));
     const cells = [...clear].map(k => [Math.floor(k / SIZE), k % SIZE]);
@@ -3489,9 +3518,13 @@ function buildReport() {
     L.push("  mana             none (no colour bound to mana)");
   }
   const voidSelf = stats.swipes.reduce((a, s) => a + s.selfDmg, 0);
-  if (voidSelf)
+  if (voidSelf) {
     L.push(`  void self-damage ${voidSelf}   <- GROSS. "damage taken" above is net of healing,`
            + ` so a build that heals can be paying far more for the void than it looks`);
+    const worstVoid = stats.swipes.reduce((a, s) => Math.max(a, s.voidMatched), 0);
+    L.push(`  worst void swipe ${worstVoid} gems matched   <- ${VOID_LETHAL_MATCHES} in one swipe kills outright;`
+           + ` the self-hit alone never can, it holds you at 1`);
+  }
   if (stats.ampPeak || stats.etherealPeak)
     L.push(`  peak stacks      amplify ${stats.ampPeak}/10   ethereal ${stats.etherealPeak}/10` +
            `   <- do the same-turn amps ever actually get stacked?`);
@@ -4198,6 +4231,12 @@ function render(fresh) {
   if (player.nextSwipeTriggerMult > 1) buffs.push(`NEXT SWIPE TRIGGERS x${player.nextSwipeTriggerMult}`);
   if (player.dmgNegateNextTurn) buffs.push("NEXT TURN'S DAMAGE NEGATED");
   if (player.deathmarkActive) buffs.push("DEATHMARK ACTIVE -- CLEAR THE FIELD OR DIE");
+  /* Live during the cascade, because render() runs between cascade steps --
+     the number climbs while the board unravels, which is the only warning a
+     player gets before the cliff. */
+  if (swipeTally && swipeTally.voidMatched)
+    buffs.push(`VOID THIS SWIPE ${swipeTally.voidMatched}/${VOID_LETHAL_MATCHES}`
+      + (swipeTally.voidMatched >= VOID_LETHAL_MATCHES * 0.6 ? " -- DANGER" : ""));
   if (player.gambleNextLine3) buffs.push("NEXT 3-MATCH IS A GAMBLE");
   if (player.sharpenStacks) buffs.push(`SHARPEN ${player.sharpenStacks}/${SHARPEN_MAX_STACKS} (+${player.sharpenStacks * Math.round(SHARPEN_PCT_PER_STACK * 100)}% next hit)`);
   // Focus was the one banking mechanic with no buff readout at all -- a
@@ -5043,10 +5082,14 @@ document.getElementById("advancedToggle").onchange = e => {
 };
 /* ---- reduced flashing ----
    Remembered across runs, because a tester who needs it needs it every time.
-   Defaults to ON when the operating system asks for reduced motion, which is
-   the only signal we get without asking. Both checkboxes (setup screen and
-   in-game) drive this one function and stay in step, and it applies live, so
-   nobody has to restart a run to get relief. */
+   Defaults to ON for everyone. It used to key off the OS reduced-motion
+   setting, which meant the comfortable version was only reached by the people
+   who had already found that setting -- and the strobing is the one thing a
+   tester has reported as physically unpleasant. Nothing about the game is
+   hidden by it, so ON is the safe side of the default to be wrong on; anyone
+   who wants the flare unchecks a box that is right there on the setup screen.
+   Both checkboxes (setup screen and in-game) drive this one function and stay
+   in step, and it applies live, so nobody has to restart a run to get relief. */
 const FX_KEY = "heritage.reducedFx";
 
 function setReducedFx(on, persist) {
@@ -5061,9 +5104,9 @@ function setReducedFx(on, persist) {
 (function initReducedFx() {
   let stored = null;
   try { stored = localStorage.getItem(FX_KEY); } catch (e) {}
-  const prefersReduced = window.matchMedia
-    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  setReducedFx(stored === null ? prefersReduced : stored === "1", false);
+  // No stored choice means the tester has never touched it -- that is the
+  // default, and the default is on. Only an explicit "0" turns it off.
+  setReducedFx(stored === null ? true : stored === "1", false);
   for (const id of ["fxToggle", "fxToggleGame"]) {
     const el = document.getElementById(id);
     if (el) el.onchange = ev => setReducedFx(ev.target.checked, true);
