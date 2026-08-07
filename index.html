@@ -708,7 +708,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-04b";
+const GAME_VERSION = "2026-08-07a";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -738,15 +738,36 @@ const GAME_VERSION = "2026-08-04b";
    The longer version, with the reasoning behind each item, lives in
    docs/PLAYTESTING.md in the private repo -- keep them roughly in step.  */
 const TESTING_FOCUS = {
-  updated: "2 Aug 2026",
-  intro: "The spell layer is new and its costs are a first pass — worked out from one "
-       + "simulation plus older human data, not from play. Everything below is trying to "
-       + "prove those numbers wrong. Use the note box under the log during a run, and the "
-       + "comment box when you submit.",
+  updated: "7 Aug 2026",
+  intro: "Five things changed today, all of them because of something one of you wrote in "
+       + "a run report. This round is about whether the fixes landed — so if a fight feels "
+       + "different from last time, that is the thing worth writing down. Use the note box "
+       + "under the log during a run, and the comment box when you submit.",
   runs: [
+    { build: "anything at all — just reach the goblin warren",
+      why: "the warren ended 42% of all runs last round, in under two turns. The goblins "
+         + "now start weak and warm up: 4 damage each on their first turn, 6 on the second, "
+         + "the full 9 from the third on. Is it still the wall? Is it now a pushover?",
+      setup: { preset: "warden" } },
+    { build: "a build with 5chain -> negate all damage",
+      why: "negate no longer fires from a plain 5chain gem — you have to FUSE it with "
+         + "another chain gem. Same effect, much rarer. Can you still get it when you "
+         + "need it, or has it become unreachable?",
+      setup: { preset: "warden" } },
+    { build: "Void's Gift, both pieces, long run",
+      why: "void gems destroyed by explosions used to vanish for good; now everything a "
+         + "swipe destroys comes back when the board settles. Does the board spiral out "
+         + "of control, and can you steer it when it does?",
+      setup: { preset: "warden", sets: ["voidsGift", "voidsGift"] } },
+    { build: "anything with the deathmark ultimate",
+      why: "landing it on your last swipe of a turn used to kill you outright with no "
+         + "chance to react. You now get a full turn to clear the field. Is one turn "
+         + "enough to make it a gamble rather than a coin flip?",
+      setup: { preset: "warden" } },
     { build: "Warden preset, unchanged",
-      why: "the baseline everything else is measured against. Does damage-per-turn still "
-         + "land around 110–170, now that execute, sharpen, void and poison gems exist?",
+      why: "the baseline everything else is measured against. Damage per turn across 23 "
+         + "logged runs ran 54–256, median 133 — a much wider spread than we thought. "
+         + "Where does yours land?",
       setup: { preset: "warden" } },
     { build: "Stormcaller preset, unchanged",
       why: "how much mana a caster really earns in a fight, and how much you can bank "
@@ -780,6 +801,10 @@ const TESTING_FOCUS = {
       + "game makes you fill every slot.",
     "<b>Two different tier pieces, or the same one twice?</b> Mixing is supposed to be worth it.",
     "The <b>void gem</b> hits hard and hurts you a little. Fair bargain, or just a tax?",
+    "Did the <b>goblin warren</b> still decide your run, one way or the other?",
+    "If a number in the log looked wrong, say so — one of last round's reports found a "
+      + "bug that way (splash damage was not naming itself, so it read like the wrong "
+      + "colour was attacking).",
   ],
   askfor: "Anything that felt wrong is worth writing down even if you can't say why — "
         + "that is usually the most useful thing in a report.",
@@ -1038,7 +1063,7 @@ const TRIGGER_DESC = {
   restore_health_major: `+${MAJOR_HEAL_RESTORE} health`,
   phantom_blade: `Red/Yellow payouts (attack/bleed/splash) are doubled for ${PHANTOM_BLADE_TURNS} turns`,
   swipe_multiplier: `your next swipe's triggers all fire ${SWIPE_MULT_TRIGGER_COUNT}x`,
-  damage_negate: "next turn's enemy damage is fully negated, then reflected back once tallied",
+  damage_negate: "ONLY in a fusion: next turn's enemy damage is fully negated, then reflected back once tallied",
   deathmark: `every living enemy is set to ${DEATHMARK_ENEMY_HP} hp -- clear the field before your `
     + `next turn ends, or you die`,
 };
@@ -1276,8 +1301,9 @@ const SETS = {
   voidsGift: {
     name: "Void's Gift",
     twoPcBlurb: "every 3 blue gems matched spawns a void gem -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too",
-    fourPcBlurb: "every void gem you match reseeds another, so spending them never thins "
-      + "them out -- only blue grows the count. They also chip everything for 1 more",
+    fourPcBlurb: "every void gem a swipe destroys is put back when the board settles -- "
+      + "matched, blasted or detonated, the count never thins out. Only blue grows it. "
+      + "Matching them also chips everything for 1 more",
     twoPc: { voidGift2pc: true },
     fourPc: { voidGift4pc: true },
   },
@@ -1484,8 +1510,10 @@ const ENCOUNTERS = [
     mkEnemy("Bandit", 190, [["slash", 1, 16], ["stab", 2, 30]]),
   ]],
   ["An ogre in the dark", () => [mkEnemy("Ogre", 600, [["club", 2, 34], ["stomp", 3, 55]], 2)]],
+  // The goblins warm up -- see SWARM_RAMP. Six of them at full strength on
+  // turn one was the single biggest run-ender in the logs.
   ["A goblin warren", () => Array.from({ length: 6 }, (_, i) =>
-    mkEnemy("Goblin " + (i + 1), 62, [["jab", 1, 9]]))],
+    mkEnemy("Goblin " + (i + 1), 62, [["jab", 1, 9]], 1, SWARM_RAMP))],
   ["The dragon", () => [mkEnemy("Dragon", 1600,
     [["claw", 1, 26], ["tail sweep", 2, 40], ["BREATH", 3, 85]], 3)]],
 ];
@@ -1494,13 +1522,13 @@ const ENCOUNTERS = [
    ends in victory -- it ends when the world finds your limit. */
 function endlessWave(n) {
   const hpM = 1 + 0.25 * n, dmgM = 1 + 0.15 * n;
-  const scaled = (name, hp, actions, resolve = 1) =>
+  const scaled = (name, hp, actions, resolve = 1, ramp = null) =>
     mkEnemy(name, Math.round(hp * hpM),
-            actions.map(([l, w, d]) => [l, w, Math.round(d * dmgM)]), resolve);
+            actions.map(([l, w, d]) => [l, w, Math.round(d * dmgM)]), resolve, ramp);
   const templates = [
     ["The warren stirs again", () => Array.from(
       { length: Math.min(8, 6 + Math.floor((n + 1) / 2)) },
-      (_, i) => scaled("Goblin " + (i + 1), 62, [["jab", 1, 9]]))],
+      (_, i) => scaled("Goblin " + (i + 1), 62, [["jab", 1, 9]], 1, SWARM_RAMP))],
     ["A bandit company", () => Array.from({ length: 4 }, (_, i) =>
       scaled("Bandit " + (i + 1), 190, [["slash", 1, 16], ["stab", 2, 30]]))],
     ["Ogres, brothers", () => Array.from({ length: 2 }, (_, i) =>
@@ -1518,18 +1546,44 @@ let board, special, loadout;
 let player, enemies, targetIdx, encounter, swipes, busy = false;
 let valueMult = 1;  // Lchain/Tchain "double_next_swipe" -- 2 for one swipe's resolution, else 1
 let triggerRepeat = 1;  // Power "swipe_multiplier" -- SWIPE_MULT_TRIGGER_COUNT for one swipe, else 1
+/* Void's Gift 4pc: every void gem destroyed during one swipe, by any means.
+   Counted in collapse() rather than at the match, because a swipe destroys
+   voids three ways -- matching them, a special's blast sweeping them up, and a
+   fusion's detonation -- and only the first went through the match path. That
+   was the whole complaint: the population visibly thinned out on big turns,
+   which is exactly when the set is supposed to hold. collapse() is the one
+   chokepoint all three share. */
+let voidsLostThisSwipe = 0;
+/* Which turn of the CURRENT encounter is being played, 1-based. Only the
+   warm-up ramp reads it (see rampedDamage), and it advances at the very end
+   of endTurn so the telegraph and the hit it describes never disagree. */
+let encTurn = 1;
 
 const rnd = n => Math.floor(Math.random() * n);
 const pick = a => a[rnd(a.length)];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const key = (r, c) => r * SIZE + c;
 
-function mkEnemy(name, hp, actions, resolve = 1) {
+/* Per-encounter-turn damage multipliers for an enemy that warms up instead of
+   opening at full strength. Indexed by how many turns the encounter has been
+   running; the last entry holds forever after.
+
+   A swarm that opens at full power is not a difficulty curve, it is a coin
+   flip. Six goblins jabbing for 9 is 54 damage on turn one against a 50 hp
+   player -- before a single block has been earned. Logged play bore that out
+   (20 runs, versions 2026-08-03j and 2026-08-04b): the warren ended 42% of all
+   runs, in a mean of 1.8 turns, costing 23.6 hp on average, while the ogre
+   immediately before it took 0.5. A ramp fixes the opening without touching
+   the ceiling -- the swarm still reaches full strength, you just get a turn to
+   stand up first. 9 damage becomes 4, then 6, then 9. */
+const SWARM_RAMP = [0.45, 0.7, 1];
+
+function mkEnemy(name, hp, actions, resolve = 1, ramp = null) {
   // resolve: how many stuns it takes to stagger this enemy. Each stun ticks
   // the meter (overflow rather than waste); at `resolve` ticks it loses its
   // action and the meter resets.
   const e = { name, hp, maxHp: hp, actions, bleed: 0, stunned: 0,
-              resolve, stunMeter: 0,
+              resolve, stunMeter: 0, ramp,
               freezeStacks: 0,  // status effect: 3 stacks -> 1 stun, ticks the same stagger meter
               acidTurns: 0, acidDmg: 0,  // spell "Acid rain"
               confused: false,  // Major "confuse": next queued attack retargets to another enemy
@@ -1543,6 +1597,24 @@ function queueNext(e) {
   e.pending = pick(e.actions);
   e.countdown = e.pending[1];
 }
+
+/* An enemy's damage after its warm-up ramp. EVERY read of a pending attack's
+   damage goes through here, including the one the enemy card renders, so the
+   number a player is shown is always the number that will land -- a telegraph
+   that lied would be worse than no ramp at all.
+
+   That is why this reads `encTurn` rather than deriving the turn from
+   stats.turns: stats.turns increments at the TOP of endTurn, so a derived
+   index would step forward between the telegraph and the hit it describes.
+   encTurn holds the number of the turn currently being played and only moves
+   once that turn is fully resolved. */
+function rampedDamage(e) {
+  const raw = e.pending[2];
+  if (!e.ramp || !e.ramp.length) return raw;
+  const mult = e.ramp[Math.min(encTurn - 1, e.ramp.length - 1)];
+  return Math.max(1, Math.round(raw * mult));
+}
+
 const living = () => enemies.filter(e => e.hp > 0);
 function currentTarget() {
   const alive = living();
@@ -1645,6 +1717,7 @@ function findMatches(b) {
 
 function collapse(cells) {
   const cleared = new Set(cells.map(([r, c]) => key(r, c)));
+  for (const [r, c] of cells) if (board[r][c] === "X") voidsLostThisSwipe++;
   for (let c = 0; c < SIZE; c++) {
     const keepB = [], keepS = [];
     for (let r = 0; r < SIZE; r++) {
@@ -1879,7 +1952,14 @@ function applyEffect(effect, value, tag, color) {
       log(`${tag}: ${d} splash to ${others.length} other(s)`, "hit");
       addTurnTotal(color, d * others.length);
     } else if (t) {
-      const d2 = dealDamage(t, value); log(`${tag}: ${d2} damage to ${t.name}`, "hit");
+      /* Against a lone enemy there is nothing to splash TO, so it pays out on
+         the target instead. That used to log as a bare "N damage to X", which
+         is indistinguishable from a red attack -- a tester on a build with no
+         attack colour at all reported the dragon taking damage from their mana
+         gems, because the yellow that actually dealt it never said so. Name
+         the source. */
+      const d2 = dealDamage(t, value);
+      log(`${tag}: ${d2} splash damage to ${t.name} (nothing else to splash to)`, "hit");
       addTurnTotal(color, value);
     }
   } else if (effect === "sharpen") {
@@ -1931,16 +2011,39 @@ function stunTarget() {
 
 /* Place `count` seeded gems (see SEEDED_GEMS) onto random board cells,
    overwriting whatever was there. Shared by the Minor "spawn void gems"
-   trigger and Void's Gift's own passive spawning. */
-function seedGems(color, count) {
+   trigger and Void's Gift's own passive spawning.
+
+   `avoidExisting` deals cells that do not already hold `color` first, so the
+   count really grows by `count`. Only Void's Gift's 4pc reseed asks for it,
+   because only it PROMISES a number: seeding at random over a board that is
+   already half void quietly lands on gems it already owns, and the population
+   it swore never thins out does exactly that -- most often on the huge swipes
+   where the set is supposed to shine. The 2pc trickle keeps the old
+   behaviour; it promises nothing. */
+function seedGems(color, count, avoidExisting) {
   const cells = [];
   for (let r = 0; r < SIZE; r++) for (let c = 0; c < SIZE; c++) cells.push([r, c]);
   for (let i = cells.length - 1; i > 0; i--) {
     const j = rnd(i + 1); [cells[i], cells[j]] = [cells[j], cells[i]];
   }
+  if (avoidExisting) cells.sort((a, b) =>
+    (board[a[0]][a[1]] === color) - (board[b[0]][b[1]] === color));
   let placed = 0;
   for (const [r, c] of cells.slice(0, count)) { board[r][c] = color; placed++; }
   return placed;
+}
+
+/* Void's Gift 4pc, settled once per swipe: put back exactly as many void gems
+   as the swipe destroyed, however they were destroyed. Batched at the end
+   rather than reseeded mid-cascade so the new gems land on a board that has
+   stopped moving -- they sit there as a position to play into on the next
+   swipe, which is the point. A mid-cascade reseed would just be swept up by
+   the same cascade that triggered it. */
+function reseedLostVoids() {
+  if (!loadout.voidGift4pc || !voidsLostThisSwipe) return;
+  const placed = seedGems("X", voidsLostThisSwipe, true);
+  if (placed) log(`the void replaces itself -- ${placed} void gem(s) reseeded`, "spec");
+  voidsLostThisSwipe = 0;
 }
 
 /* Void ('X') gem: a hardcoded effect, not bound to the player's own colour
@@ -1955,16 +2058,12 @@ function applySeededGem(color, gemCount, tag) {
     player.hp -= selfhit;
     log(`${tag}: void gem hits ${t.name} for ${value} (and you for ${selfhit})`, "hit");
     if (loadout.voidGift4pc) {
-      /* 4pc: matching void gems replaces them ONE FOR ONE, so cashing them in
-         never thins them out -- a board that has gone void stays void, and
-         the only thing that can grow the population is blue (the 2pc). That
-         makes the set a commitment rather than a trickle: it ratchets up
-         while you feed it blue and holds its ground while you spend it.
-         Also chips every living enemy for a flat 1. */
-      const placed = seedGems("X", gemCount);
+      /* 4pc: the reseed itself is no longer done here. It is settled once per
+         swipe against every void lost by ANY route -- see voidsLostThisSwipe
+         and reseedLostVoids(). All that belongs to the match is the flat chip
+         on every living enemy. */
       for (const e of living()) dealDamage(e, 1);
-      if (placed) log(`${tag}: the void replaces itself -- ${placed} void gem(s) reseeded, `
-        + `1 damage to all enemies`, "hit");
+      log(`${tag}: the void chips every enemy for 1`, "hit");
     }
   }
 }
@@ -2082,13 +2181,13 @@ function applyFreeze(victim, tag) {
    while triggerRepeat > 1 (set for exactly one swipe, see attemptSwap),
    every trigger that fires during that swipe's whole cascade fires that
    many times, not just the first. */
-function fireTrigger(trigger, value, tag, color, otherShape, otherColor) {
+function fireTrigger(trigger, value, tag, color, otherShape, otherColor, fromFusion) {
   const times = triggerRepeat > 1 ? triggerRepeat : 1;
   let extraCleared = [];
   for (let i = 0; i < times; i++) {
     const tTag = times === 1 ? tag : `${tag} (x${i + 1}/${times})`;
     extraCleared = extraCleared.concat(
-      fireTriggerOnce(trigger, value, tTag, color, otherShape, otherColor) || []);
+      fireTriggerOnce(trigger, value, tTag, color, otherShape, otherColor, fromFusion) || []);
   }
   return extraCleared;
 }
@@ -2099,9 +2198,13 @@ function fireTrigger(trigger, value, tag, color, otherShape, otherColor) {
    outside a mismatched fusion, including a same-family line5 fusion, which
    deliberately does NOT feed wildcard its own shape (that would let a
    converted line5 re-trigger wildcard on detonation and recurse forever).
+   `fromFusion` is true when this trigger is one half of a fusion rather than a
+   lone special detonating -- damage_negate is the only trigger that cares, and
+   it fires ONLY then.
+
    Returns an array of extra [r, c] cells cleared as a side effect (only
    wildcard produces any) so callers can fold them into their own collapse. */
-function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
+function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor, fromFusion) {
   const t = currentTarget();
   if (trigger === "stun") {
     const [victim, redirected] = stunTarget();
@@ -2259,8 +2362,18 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     player.nextSwipeTriggerMult = SWIPE_MULT_TRIGGER_COUNT;
     log(`>> ${tag} TRIGGER: your next swipe's triggers fire ${SWIPE_MULT_TRIGGER_COUNT}x`, "spec");
   } else if (trigger === "damage_negate") {
-    player.dmgNegateNextTurn = true;
-    log(`>> ${tag} TRIGGER: next turn's damage is negated and reflected`, "spec");
+    /* Fusion-only (2026-08-07). Negation scales with how many attacks are
+       coming, not with how big they are, so on the six-goblin warren it was
+       worth ~54 hp -- more than a full health bar, off a plain line5 special
+       that fired 27 times across 20 logged runs against 10 fusion procs.
+       Rather than weaken the effect, make it rare: it stays exactly as strong,
+       but you have to build a fusion to get it. */
+    if (!fromFusion) {
+      log(`>> ${tag} TRIGGER: damage negate needs a fusion — nothing happens`, "spec");
+    } else {
+      player.dmgNegateNextTurn = true;
+      log(`>> ${tag} TRIGGER: next turn's damage is negated and reflected`, "spec");
+    }
   } else if (trigger === "deathmark") {
     let hitAny = false;
     for (const e of living()) {
@@ -2269,6 +2382,13 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor) {
     }
     if (hitAny) {
       player.deathmarkActive = true;
+      // The enemy phase that follows still belongs to the turn you armed this
+      // on, so without a grace turn the countdown expires before you get to
+      // act -- landing the ultimate on the last swipe of a turn was a pure
+      // suicide button (logged 2026-08-05: armed at t9, killed at t9's enemy
+      // phase, zero player turns in between). One turn of grace makes it the
+      // gamble it was written to be.
+      player.deathmarkGrace = 1;
       log(`>> ${tag} TRIGGER: DEATHMARK — every enemy is at ${DEATHMARK_ENEMY_HP} hp. Clear the field before your next turn ends, or you die.`, "spec");
     }
   }
@@ -2434,7 +2554,7 @@ function comboDetonate(shape, colours, cells, opts) {
     // converted gem would re-trigger wildcard on its own detonation and
     // recurse without end.
     const otherShape = halves[otherI] === shp ? null : halves[otherI];
-    const extra = fireTrigger(trig, value, tag, halfColors[i], otherShape, halfColors[otherI]) || [];
+    const extra = fireTrigger(trig, value, tag, halfColors[i], otherShape, halfColors[otherI], true) || [];
     extraCleared = extraCleared.concat(extra);
   });
 
@@ -2528,7 +2648,7 @@ function doFuse(r1, c1, r2, c2) {
   // Ultimate socket: an ADDITIONAL player-picked payoff on the same
   // rarest-pairing event, alongside (not instead of) the ignite freebie.
   if (ignite && loadout.shapes.ultimate) {
-    fireTrigger(loadout.shapes.ultimate, value, `${famA}+${famB} ULTIMATE`);
+    fireTrigger(loadout.shapes.ultimate, value, `${famA}+${famB} ULTIMATE`, null, null, null, true);
   }
   const rareNote = rarity === 1.0 ? "" : "  [rarity x" + rarity + "]";
   log("!! FUSION: " + shown + " -- " + label + rareNote, "combo");
@@ -2973,7 +3093,8 @@ async function endTurn() {
     if (e.stunned) { e.stunned--; log(`${e.name} is stunned and loses its action`, "good"); continue; }
     e.countdown--;
     if (e.countdown <= 0) {
-      const [label, , rawDmg] = e.pending;
+      const label = e.pending[0];
+      const rawDmg = rampedDamage(e);
       const { dmg, cut } = incomingDamage(rawDmg);
       if (player.dodgeCharges > 0) {
         player.dodgeCharges--;
@@ -3057,16 +3178,23 @@ async function endTurn() {
   }
 
   if (player.deathmarkActive) {
-    if (living().length) {
+    if (!living().length) {
+      log("DEATHMARK cleared — the field is empty, you survive", "good");
+      player.deathmarkActive = false;
+    } else if (player.deathmarkGrace > 0) {
+      // Armed during the swipe that led into this very enemy phase. Spend the
+      // grace turn instead of resolving -- see the trigger.
+      player.deathmarkGrace--;
+      log("DEATHMARK is armed — clear the field on your next turn, or you die", "spec");
+    } else {
       player.hp = 0;
       log("DEATHMARK claims you — the field was not cleared in time", "hit");
-    } else {
-      log("DEATHMARK cleared — the field is empty, you survive", "good");
+      player.deathmarkActive = false;
     }
-    player.deathmarkActive = false;
   }
 
   if (player.phantomBladeTurns > 0) player.phantomBladeTurns--;
+  encTurn++;   // this encounter's turn is now fully resolved -- see rampedDamage
 
   checkAceOfClubs();  // locusts/wild-charge/bleed/acid/thorns could all have just killed something
 
@@ -3269,10 +3397,11 @@ function buildReport() {
   L.push("");
   L.push("output and economy");
   L.push(`  damage dealt     ${stats.dmgDealt}  (${(stats.dmgDealt / tn).toFixed(1)}/turn)` +
-         `   <- the calibration anchor; playtest eight measured 110-170`);
+         `   <- the calibration anchor; 23 logged runs span 54-256, median 133`);
   L.push(`  damage taken     ${stats.dmgTaken}  (${(stats.dmgTaken / tn).toFixed(1)}/turn)`);
   L.push(`  specials/match   ${(stats.specials / totalShapes * 100).toFixed(1)}%` +
-         `   <- skill-invariant anchor; every logged run so far says 27-28%`);
+         `   <- 23 logged runs span 24-32%, median 27. The MEAN is the stable`
+         + ` part; a single run landing outside that is normal, not a signal`);
   if (stats.manaGained || stats.manaSpent) {
     const casts = Object.values(stats.castsPerTurn);
     L.push(`  mana earned      ${stats.manaGained}  (${(stats.manaGained / tn).toFixed(1)}/turn)`);
@@ -3459,6 +3588,7 @@ async function attemptSwap(r1, c1, r2, c2) {
     if (repeat > 1) { triggerRepeat = repeat; player.nextSwipeTriggerMult = 1; }
 
     let chain;
+    voidsLostThisSwipe = 0;
     if (fusing) {
       doFuse(r1, c1, r2, c2);
       /* doFuse collapses the board itself, OUTSIDE resolveBoard's loop, so
@@ -3473,6 +3603,9 @@ async function attemptSwap(r1, c1, r2, c2) {
     } else {
       chain = await resolveBoard();
     }
+
+    reseedLostVoids();
+    render(true);
 
     valueMult = 1;
     triggerRepeat = 1;
@@ -3924,7 +4057,7 @@ function render(fresh) {
     const now = e.countdown <= 1;
     const tele = e.stunned
       ? `stunned${e.stunned > 1 ? " x" + e.stunned : ""}`
-      : `${e.pending[0]} — ${e.pending[2]} dmg, ${now ? "NOW" : "in " + e.countdown}`
+      : `${e.pending[0]} — ${rampedDamage(e)} dmg, ${now ? "NOW" : "in " + e.countdown}`
         + (e.stunMeter ? ` [staggered ${e.stunMeter}/${e.resolve}]` : "");
     const portrait = ENEMY_ART[e.name] ? `<img class="portrait" src="${ENEMY_ART[e.name]}" alt="">` : "";
     return `<div class="enemy ${e === currentTarget() ? "target" : ""}" data-i="${i}">
@@ -3995,6 +4128,8 @@ function startEncounter() {
   player.nextSwipeTriggerMult = 1;
   player.dmgNegateNextTurn = false;
   player.deathmarkActive = false;
+  player.deathmarkGrace = 0;
+  encTurn = 1;
   player.tactician2pcUsedThisTurn = 0;
   player.tactician4pcUsedThisTurn = 0;
   player.gambleNextLine3 = false;
@@ -4486,6 +4621,7 @@ function begin(picksArg, setKeys, tutorial) {
              nextSwipeTriggerMult: 1,      // Power "swipe activation trigger 5x" -- consumed after one swipe
              dmgNegateNextTurn: false,     // Power "damage negate + reflect"
              deathmarkActive: false,       // Ultimate "deathmark"
+             deathmarkGrace: 0,            // turns of grace left before an armed deathmark resolves
              tactician2pcUsedThisTurn: 0, tactician4pcUsedThisTurn: 0,
              gambleNextLine3: false,       // spell "Gambler's Gambit"
              sharpenStacks: 0,             // Yellow "sharpen" -- banked, consumed whole by the next attack/bleed/splash
