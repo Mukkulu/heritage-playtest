@@ -708,7 +708,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-07a";
+const GAME_VERSION = "2026-08-07b";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -1300,7 +1300,7 @@ const SETS = {
   },
   voidsGift: {
     name: "Void's Gift",
-    twoPcBlurb: "every 3 blue gems matched spawns a void gem -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too",
+    twoPcBlurb: "every blue gem you match spawns a void gem, one for one -- a fifth, colourless gem that pays double a normal hit when matched, at the cost of a little damage to you too",
     fourPcBlurb: "every void gem a swipe destroys is put back when the board settles -- "
       + "matched, blasted or detonated, the count never thins out. Only blue grows it. "
       + "Matching them also chips everything for 1 more",
@@ -1554,6 +1554,10 @@ let triggerRepeat = 1;  // Power "swipe_multiplier" -- SWIPE_MULT_TRIGGER_COUNT 
    which is exactly when the set is supposed to hold. collapse() is the one
    chokepoint all three share. */
 let voidsLostThisSwipe = 0;
+/* Void gems GRANTED during one swipe -- by the 2pc's blue matches and by the
+   spawn_void_minor trigger. Placed at the settle for the same reason, see
+   settleVoidGems. */
+let voidsToSeedThisSwipe = 0;
 /* Which turn of the CURRENT encounter is being played, 1-based. Only the
    warm-up ramp reads it (see rampedDamage), and it advances at the very end
    of endTurn so the telegraph and the hit it describes never disagree. */
@@ -2033,16 +2037,26 @@ function seedGems(color, count, avoidExisting) {
   return placed;
 }
 
-/* Void's Gift 4pc, settled once per swipe: put back exactly as many void gems
-   as the swipe destroyed, however they were destroyed. Batched at the end
-   rather than reseeded mid-cascade so the new gems land on a board that has
-   stopped moving -- they sit there as a position to play into on the next
-   swipe, which is the point. A mid-cascade reseed would just be swept up by
-   the same cascade that triggered it. */
-function reseedLostVoids() {
-  if (!loadout.voidGift4pc || !voidsLostThisSwipe) return;
-  const placed = seedGems("X", voidsLostThisSwipe, true);
-  if (placed) log(`the void replaces itself -- ${placed} void gem(s) reseeded`, "spec");
+/* EVERY void gem a swipe grants or replaces lands here, once, after the board
+   has stopped moving.
+
+   Nothing may seed mid-cascade. A gem placed during the cascade goes onto a
+   random cell -- including one of the cells that same cascade is about to
+   clear -- so it was destroyed in the very breath the log announced it: about
+   a 31% chance on a 20-cell clear. A tester reported matching five blue and
+   getting no void gem at all, on a run whose log says `seeds 1`. Both were
+   true. Settling makes the log's claim and the board agree, and it is what
+   makes the gems a position you can play into next swipe. */
+function settleVoidGems() {
+  if (voidsToSeedThisSwipe) {
+    const placed = seedGems("X", voidsToSeedThisSwipe, true);
+    if (placed) log(`${placed} void gem(s) settle onto the board`, "spec");
+    voidsToSeedThisSwipe = 0;
+  }
+  if (loadout.voidGift4pc && voidsLostThisSwipe) {
+    const placed = seedGems("X", voidsLostThisSwipe, true);
+    if (placed) log(`the void replaces itself -- ${placed} void gem(s) reseeded`, "spec");
+  }
   voidsLostThisSwipe = 0;
 }
 
@@ -2060,7 +2074,7 @@ function applySeededGem(color, gemCount, tag) {
     if (loadout.voidGift4pc) {
       /* 4pc: the reseed itself is no longer done here. It is settled once per
          swipe against every void lost by ANY route -- see voidsLostThisSwipe
-         and reseedLostVoids(). All that belongs to the match is the flat chip
+         and settleVoidGems(). All that belongs to the match is the flat chip
          on every living enemy. */
       for (const e of living()) dealDamage(e, 1);
       log(`${tag}: the void chips every enemy for 1`, "hit");
@@ -2333,8 +2347,9 @@ function fireTriggerOnce(trigger, value, tag, color, otherShape, otherColor, fro
     player.hp += healed;
     log(`>> ${tag} TRIGGER: +${healed} health`, "good");
   } else if (trigger === "spawn_void_minor") {
-    const placed = seedGems("X", MINOR_VOID_GEM_SPAWN);
-    if (placed) log(`>> ${tag} TRIGGER: spawns ${placed} void gem(s)`, "spec");
+    // Granted now, placed at the settle -- see settleVoidGems.
+    voidsToSeedThisSwipe += MINOR_VOID_GEM_SPAWN;
+    log(`>> ${tag} TRIGGER: spawns ${MINOR_VOID_GEM_SPAWN} void gem(s)`, "spec");
   } else if (trigger === "freeze") {
     if (t) applyFreeze(t, tag);
   } else if (trigger === "bleed_spike_all") {
@@ -2716,14 +2731,15 @@ async function resolveBoard() {
         if (color === loadout.locustColor) player.locusts += cells.length;
         if (color === loadout.wildChargeColor) { player.wildCharges += cells.length; addTurnTotal(color, cells.length); }
 
-        // Void's Gift 2pc: every 3 blue gems matched spawns a void gem --
-        // independent of whatever blue is actually bound to.
-        if (color === "B" && loadout.voidGift2pc) {
-          const n = Math.floor(cells.length / 3);
-          if (n) {
-            const placed = seedGems("X", n);
-            if (placed) log(`${tag}: Void's Gift seeds ${placed} void gem(s)`, "spec");
-          }
+        // Void's Gift 2pc: every blue gem matched grants a void gem, one for
+        // one -- independent of whatever blue is actually bound to. (Was one
+        // per THREE blue until 2026-08-07b; a five-blue match paying a single
+        // gem read as broken to every tester who tried it, and the set's
+        // whole promise is that blue feeds the void.) Granted here, placed at
+        // the settle -- see settleVoidGems.
+        if (color === "B" && loadout.voidGift2pc && cells.length) {
+          voidsToSeedThisSwipe += cells.length;
+          log(`${tag}: Void's Gift grants ${cells.length} void gem(s)`, "spec");
         }
 
         const effect = loadout.colors[color];
@@ -3589,6 +3605,7 @@ async function attemptSwap(r1, c1, r2, c2) {
 
     let chain;
     voidsLostThisSwipe = 0;
+    voidsToSeedThisSwipe = 0;
     if (fusing) {
       doFuse(r1, c1, r2, c2);
       /* doFuse collapses the board itself, OUTSIDE resolveBoard's loop, so
@@ -3604,7 +3621,7 @@ async function attemptSwap(r1, c1, r2, c2) {
       chain = await resolveBoard();
     }
 
-    reseedLostVoids();
+    settleVoidGems();
     render(true);
 
     valueMult = 1;
