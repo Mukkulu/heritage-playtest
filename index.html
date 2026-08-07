@@ -709,7 +709,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-08d";
+const GAME_VERSION = "2026-08-08e";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -830,6 +830,25 @@ const TESTING_FOCUS = {
 
 const SIZE = 8;
 const COLORS = ["R", "G", "Y", "B"];
+// One definition, used by the setup screen's socket labels AND by the Void's
+// Gift blurb. It lives up here rather than beside the setup screen because
+// SETS is built long before that, and a const still in its temporal dead zone
+// throws rather than reading as undefined.
+const COLOUR_NAME = { R: "Red", G: "Green", Y: "Yellow", B: "Blue" };
+// One definition, used both by the setup screen's socket labels and by the
+// Void's Gift blurb. It lives up here rather than beside the setup screen
+// because SETS is built long before that, and a const in the temporal dead
+// zone throws rather than reading as undefined.
+/* Which colour Void's Gift hijacks. Moving the set between sockets is a
+   playtest lever, not a rewrite, so it lives here and everything else reads it
+   -- the colour override, the match hook, the legend and the blurb.
+
+   Moved from blue to yellow on 2026-08-08e. Blue's pool is
+   armour/lifesteal/mana/focus, so hijacking it cost the build its damage
+   mitigation outright and the set could not carry that. Yellow is
+   splash/sharpen/focus/execute -- offence and support, a real price without
+   being the thing that keeps you alive. */
+const VOID_COLOUR = "Y";
 /* Resolution pacing. Raised a lot after "it is hard for me to understand" --
    the old 190ms decaying to 45ms was too quick to follow, and a cascade
    finished before you could see what caused it. Each chain link now holds its
@@ -1067,7 +1086,7 @@ const EFFECT_DESC = {
   block: "absorbs damage this turn only (half rate)",
   mana: "fuel for spells, carries across the fight",
   splash: "damage to every enemy except your target",
-  void: "blue is hijacked -- matching it spawns void gems instead of paying anything",
+  void: "this colour is hijacked -- matching it spawns void gems instead of paying anything",
   armour: "absorbs damage and KEEPS across turns (third rate)",
   lifesteal: "heals you (half rate); past full it builds a shield instead",
   wild_charge: "no direct effect -- builds toward a free random spell",
@@ -1088,7 +1107,7 @@ function effectLabel(l, c) {
   // Blue reads as "void" on a Void's Gift build, because that is what it does:
   // the socket you picked is overridden, and a legend still showing it would
   // be describing a payout that never arrives.
-  if (c === "B" && l.voidGift2pc) return "void";
+  if (c === VOID_COLOUR && l.voidGift2pc) return "void";
   return l.colors[c] || (c === l.wildChargeColor ? "wild_charge" : null);
 }
 const TRIGGER_DESC = {
@@ -1356,7 +1375,7 @@ const SETS = {
   },
   voidsGift: {
     name: "Void's Gift",
-    twoPcBlurb: "BLUE BELONGS TO THE VOID. Whatever you socket into blue does nothing -- matching blue spawns void gems instead, one for one. Void is a fifth, colourless gem paying double a normal hit when matched, and its toll on you is DIRECT, ignoring block, armour and shield alike",
+    twoPcBlurb: COLOUR_NAME[VOID_COLOUR].toUpperCase() + " BELONGS TO THE VOID. Whatever you socket into it does nothing -- matching it spawns void gems instead, one for one. Void is a fifth, colourless gem paying double a normal hit when matched, and its toll on you is DIRECT, ignoring block, armour and shield alike",
     fourPcBlurb: "every point the void takes out of you comes straight back as "
       + "block. It still costs the health -- the toll ignores your defences -- but the "
       + "set turns that cost into a shield for the enemy turn",
@@ -1367,7 +1386,7 @@ const SETS = {
        was mana, and the setup screen already knows how to show an overridden
        socket. A branch at the match site would have suppressed the payout and
        left blue silently earning spell slots it no longer feeds. */
-    twoPc: { voidGift2pc: true, colorOverrides: { B: null } },
+    twoPc: { voidGift2pc: true, colorOverrides: { [VOID_COLOUR]: null } },
     fourPc: { voidGift4pc: true },
   },
   ace: {
@@ -2858,9 +2877,10 @@ async function resolveBoard() {
            free rider on whatever blue already did rather than a trade. Void
            has to be worth a colour to be worth choosing, and it cannot be
            worth a colour while it costs nothing to take. */
-        if (color === "B" && loadout.voidGift2pc && cells.length) {
+        if (color === VOID_COLOUR && loadout.voidGift2pc && cells.length) {
           voidsPending += cells.length;
-          log(`${tag}: blue belongs to the void -- ${cells.length} void gem(s)`, "spec");
+          log(`${tag}: ${COLOUR_NAME[VOID_COLOUR].toLowerCase()} belongs to the void`
+            + ` -- ${cells.length} void gem(s)`, "spec");
         }
 
         const effect = loadout.colors[color];
@@ -4923,7 +4943,6 @@ function begin(picksArg, setKeys, tutorial) {
 
 /* ============================ setup screen ============================ */
 
-const COLOUR_NAME = { R: "Red", G: "Green", Y: "Yellow", B: "Blue" };
 let picks = { R: null, G: null, Y: null, B: null, line4: null, hardL: null, hardT: null,
               line5: null, ultimate: null, spells: [] };
 // Two independent tier-piece slots: click a card once for its 2pc bonus,
