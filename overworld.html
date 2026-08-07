@@ -80,6 +80,47 @@
     padding: 1px 6px; font-size: 11.5px; color: var(--ink);
   }
 
+  /* ---------------- character screen: equipment + inventory ----------------
+     One screen, two columns: the ten slots on the left, the (unbounded) bag
+     on the right. It replaces the map rather than floating over it, same as
+     combat does -- three full-screen states, no overlapping z-index rules. */
+  #character { display: none; max-width: 1040px; }
+  #charLayout { display: grid; gap: 14px; grid-template-columns: 320px minmax(0, 1fr); align-items: start; }
+  @media (max-width: 780px) { #charLayout { grid-template-columns: 1fr; } }
+  .slotlist { display: flex; flex-direction: column; gap: 6px; }
+  .slot {
+    display: flex; align-items: center; gap: 8px; text-align: left; width: 100%;
+    background: var(--panel2); border: 1px solid var(--edge); border-radius: 6px;
+    padding: 7px 9px; cursor: pointer;
+  }
+  .slot:hover { border-color: #5b6580; }
+  .slot.empty { cursor: default; opacity: .72; }
+  .slot .label { flex: none; width: 78px; font-size: 11px; letter-spacing: .5px;
+                 text-transform: uppercase; color: var(--dim); }
+  .slot .body { min-width: 0; flex: 1; }
+  .slot .iname { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .slot .imeta { font-size: 11px; color: var(--dim); }
+  /* Rarity is magnitude (DESIGN §5), so it gets the loudest visual channel. */
+  .q-fine { color: #cdd3e0; } .q-superior { color: #6fc98d; }
+  .q-masterwork { color: #539bf5; } .q-legendary { color: #d9a441; }
+  .bind { flex: none; display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--dim); }
+  .bind .sw { width: 13px; height: 13px; border-radius: 3px; display: flex; flex: none;
+              align-items: center; justify-content: center; font-size: 9px; color: #0d1015; font-weight: 700; }
+  .bind.owned { color: var(--ink); }
+  .bind.shadowed .sw { opacity: .35; }
+
+  #invHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  #invHead select, #invHead input { font: inherit; font-size: 12px; color: var(--ink);
+    background: var(--panel2); border: 1px solid var(--edge); border-radius: 6px; padding: 4px 7px; }
+  #invCount { color: var(--dim); font-size: 12px; margin-left: auto; }
+  #invList { max-height: 62vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  #invList .empty { color: var(--dim); font-size: 12.5px; padding: 8px 2px; }
+  .slot .delta { flex: none; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .delta.up { color: #9fd8b4; } .delta.down { color: #f2a3a3; }
+  #charSummary .row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 1px 0; }
+  #charSummary .row .k { color: var(--dim); }
+  #newloot { color: #9fd8b4; font-size: 12.5px; }
+
   /* ---------------- combat screen ---------------- */
   #combat { display: none; max-width: 1040px; }
   .hidden { display: none !important; }
@@ -235,14 +276,50 @@
       <div class="panel">
         <h3>Kit</h3>
         <div id="kitColours"></div>
+        <div id="kitHp" style="margin-top:6px;font-size:12px;color:var(--dim)"></div>
+        <button id="openCharBtn" style="width:100%;margin-top:9px;font-size:13px;padding:6px">Character &amp; bag <kbd>I</kbd></button>
       </div>
       <div class="panel">
         <h3>Move</h3>
         <div id="hint">
           Arrow keys or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to step one tile.<br>
-          Water blocks movement. Nothing else happens yet — no gear, no fights, just walking.
+          Water blocks movement. <kbd>I</kbd> opens your gear.<br>
+          Fights drop gear; what you wear is what your colours do.
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="character">
+  <h2 style="font-size:17px;color:var(--bright);font-weight:600;margin-bottom:2px">Character</h2>
+  <div class="sub" style="color:var(--dim);font-size:12px;margin-bottom:14px">
+    Click a bag item to equip it, an equipped item to take it off. <kbd>I</kbd> or <kbd>Esc</kbd> to go back.
+  </div>
+  <div id="charLayout">
+    <div>
+      <div class="panel">
+        <h3>Equipped</h3>
+        <div class="slotlist" id="slotList"></div>
+      </div>
+      <div class="panel">
+        <h3>What this build does</h3>
+        <div id="charSummary"></div>
+      </div>
+      <div class="panel"><button class="endbtn" id="closeCharBtn">Back to the map</button></div>
+    </div>
+    <div class="panel">
+      <h3>Bag</h3>
+      <div id="invHead">
+        <select id="invFilter"></select>
+        <select id="invSort">
+          <option value="found">newest first</option>
+          <option value="quality">best first</option>
+          <option value="slot">by slot</option>
+        </select>
+        <span id="invCount"></span>
+      </div>
+      <div id="invList"></div>
     </div>
   </div>
 </div>
@@ -273,6 +350,7 @@
           <button id="cpLogBtn">Copy log</button>
         </div>
       </div>
+      <div id="newloot" class="panel hidden"></div>
       <button id="continueBtn" class="endbtn hidden" style="margin-top:10px">Continue exploring</button>
     </div>
   </div>
@@ -344,7 +422,13 @@ function integerCell(worldSize) {
    Deliberately NOT the full build-crafting system from combat.py/index.html
    -- no line4/hard-shape/line5 gem picks. Just the four colours bound to
    simple flat effects, same identities as the original three presets, minus
-   everything that would need to be found/earned while exploring. */
+   everything that would need to be found/earned while exploring.
+
+   A kit is now the STARTING GEAR rather than the build itself: picking one
+   puts four bound pieces on the character, and from that moment the colours
+   come from what's equipped (see derivedKit) -- so taking the helmet off
+   really does switch red off. `colors` below is what the starting pieces add
+   up to, kept as the source the starter items are generated from. */
 const KITS = {
   warden: {
     name: "Warden's kit",
@@ -377,13 +461,203 @@ const EFFECT_DESC = {
 };
 const COLOR_HEX = { R: "#e0544e", G: "#4cb377", Y: "#dfb13a", B: "#4a8ede" };
 
+/* ============================ gear ============================
+   DESIGN §1: "characters never level up, equipment does" -- so nothing here
+   is a stat the character owns. Both things combat reads (which effect a
+   colour pays, and how much health you have) are DERIVED from the equipped
+   items every time they're asked for, never stored on the player. That's the
+   whole reason the derivation lives in functions rather than a cached object:
+   a cached copy is a second source of truth that can disagree with the doll.
+
+   DESIGN §5 gives itemization two independent axes, and both are here:
+     - rarity is MAGNITUDE only (QUALITY_MULT), never new affixes;
+     - gear line is IDENTITY -- carried on every item, taken from the world
+       file's own civs, so a piece says which (possibly extinct) culture made
+       it. Set bonuses are not built yet; the field is what they'd read. */
+
+const SLOTS = [
+  { key: "helmet",    label: "Helmet",    kind: "helmet" },
+  { key: "shoulders", label: "Shoulders", kind: "shoulders" },
+  { key: "chest",     label: "Chest",     kind: "chest" },
+  { key: "accessory", label: "Accessory", kind: "accessory" },
+  { key: "hands",     label: "Hands",     kind: "hands" },
+  { key: "legs",      label: "Legs",      kind: "legs" },
+  { key: "boots",     label: "Boots",     kind: "boots" },
+  // Two ring slots, one ring KIND -- a ring is equippable in either, which is
+  // why slot key and item kind are separate fields rather than one string.
+  { key: "ring1",     label: "Ring",      kind: "ring" },
+  { key: "ring2",     label: "Ring",      kind: "ring" },
+  { key: "necklace",  label: "Necklace",  kind: "necklace" },
+];
+const SLOTS_FOR_KIND = (kind) => SLOTS.filter((s) => s.kind === kind);
+
+// Vocabulary lifted from sim/history.py (ITEM_NAMES_A/B, MATERIALS,
+// QUALITY_TIERS) so found gear reads like the gear the history sim already
+// forges. The sim's ITEM_TYPES are weapons and a few armour pieces; the ten
+// slots here need armour nouns it doesn't have yet, so KIND_NOUNS fills the
+// gap. When the sim grows armour lines, this table is what it replaces.
+const KIND_NOUNS = {
+  helmet: ["helm", "greathelm", "coif"],
+  shoulders: ["pauldrons", "spaulders", "mantle"],
+  chest: ["mail-coat", "cuirass", "hauberk"],
+  accessory: ["cloak", "libram", "banner"],
+  hands: ["gauntlets", "bracers", "gloves"],
+  legs: ["greaves", "legguards", "chausses"],
+  boots: ["boots", "sabatons", "treads"],
+  ring: ["ring", "signet", "band"],
+  necklace: ["necklace", "amulet", "torc"],
+};
+const NAMES_A = ["Grudge", "Oath", "Winter", "Storm", "Ember", "Doom", "Dawn",
+                 "Wyrm", "Sorrow", "Vengeance", "Star", "Night"];
+const NAMES_B = ["bane", "keeper", "bite", "song", "ward", "cleaver", "brand",
+                 "render", "call", "fall"];
+const MATERIALS = ["bronze", "iron", "steel", "starsteel"];
+const QUALITY_TIERS = ["fine", "superior", "masterwork", "legendary"];
+// Rarity is magnitude and nothing else. A legendary piece pays double what a
+// fine one does for the same binding -- no extra effect, no second stat.
+const QUALITY_MULT = { fine: 1, superior: 1.25, masterwork: 1.6, legendary: 2 };
+// How much health a slot is worth, before quality scales it. Bigger plates
+// carry more; jewellery is nearly all binding and hardly any health.
+const KIND_HP = {
+  chest: 12, legs: 8, helmet: 6, shoulders: 6, hands: 4,
+  boots: 4, accessory: 3, ring: 2, necklace: 2,
+};
+const BASE_HP = 24;   // what a naked character has; the rest is worn
+const EFFECTS = ["attack", "bleed", "block", "mana", "splash", "armour", "lifesteal"];
+
+let nextItemId = 1;
+function makeItem({ kind, quality, color, effect, line, material, name }) {
+  const mult = QUALITY_MULT[quality];
+  return {
+    id: nextItemId++,
+    kind, quality, line, material,
+    noun: name ? null : pick(KIND_NOUNS[kind]),
+    name: name || `${pick(NAMES_A)}${pick(NAMES_B)}`,
+    color, effect,
+    hp: Math.round((KIND_HP[kind] || 2) * mult),
+    mult,
+  };
+}
+function itemLabel(it) { return it.noun ? `${it.name} the ${it.noun}` : it.name; }
+
+// Gear lines come from the world's own civs, so a drop names a real culture
+// from the history you loaded -- including the fallen ones, which is the
+// point of DESIGN §5's "falling civilisations stop producing their line".
+function gearLines() {
+  const civs = (world && world.entities && world.entities.civs) || [];
+  return civs.length ? civs.map((c) => c.name) : ["Wayfarer"];
+}
+// Quality is rolled on a fixed ladder, weighted toward the bottom. Camps roll
+// twice and keep the better one -- the reason to walk into a marked camp
+// instead of farming rats.
+function rollQuality(luckyRolls) {
+  let best = 0;
+  for (let i = 0; i < Math.max(1, luckyRolls); i++) {
+    const r = Math.random();
+    const tier = r < 0.58 ? 0 : r < 0.85 ? 1 : r < 0.97 ? 2 : 3;
+    if (tier > best) best = tier;
+  }
+  return QUALITY_TIERS[best];
+}
+function rollItem(luckyRolls) {
+  const kind = pick(Object.keys(KIND_NOUNS));
+  return makeItem({
+    kind,
+    quality: rollQuality(luckyRolls),
+    color: pick(COLORS),
+    effect: pick(EFFECTS),
+    line: pick(gearLines()),
+    material: pick(MATERIALS),
+  });
+}
+
+function emptyEquipment() {
+  const eq = {};
+  for (const s of SLOTS) eq[s.key] = null;
+  return eq;
+}
+function equippedItems() {
+  return SLOTS.map((s) => player.equipment[s.key]).filter(Boolean);
+}
+
+/* Which equipped piece OWNS a colour, when several bind the same one.
+   The rule is "the biggest magnitude wins, slot order breaks ties" -- chosen
+   over slot priority because it's the one a player can act on without a
+   lookup table: a better piece always beats a worse one, whatever it is. */
+function bindingOwners() {
+  const owners = {};
+  for (const s of SLOTS) {
+    const it = player.equipment[s.key];
+    if (!it || !it.color || !it.effect) continue;
+    const cur = owners[it.color];
+    if (!cur || it.mult > cur.mult) owners[it.color] = it;
+  }
+  return owners;
+}
+// The only two things combat asks of the gear.
+function derivedKit() {
+  const kit = {};
+  for (const [color, it] of Object.entries(bindingOwners())) kit[color] = it.effect;
+  return kit;
+}
+function derivedMults() {
+  const m = {};
+  for (const [color, it] of Object.entries(bindingOwners())) m[color] = it.mult;
+  return m;
+}
+function derivedMaxHp() {
+  return equippedItems().reduce((sum, it) => sum + it.hp, BASE_HP);
+}
+
+/* Equip/unequip. Both go through here so the bag and the doll can never both
+   hold the same item -- every path is a MOVE, never a copy. */
+function equipItem(item, slotKey) {
+  const slot = SLOTS.find((s) => s.key === slotKey)
+    || SLOTS_FOR_KIND(item.kind).find((s) => !player.equipment[s.key])
+    || SLOTS_FOR_KIND(item.kind)[0];
+  if (!slot || slot.kind !== item.kind) return false;   // wrong slot for this kind
+  const idx = player.inventory.indexOf(item);
+  if (idx >= 0) player.inventory.splice(idx, 1);
+  const displaced = player.equipment[slot.key];
+  player.equipment[slot.key] = item;
+  if (displaced) player.inventory.push(displaced);      // swaps never destroy gear
+  return true;
+}
+function unequipSlot(slotKey) {
+  const it = player.equipment[slotKey];
+  if (!it) return false;
+  player.equipment[slotKey] = null;
+  player.inventory.push(it);
+  return true;
+}
+// The bag is deliberately unbounded for now -- no weight, no slot count. If a
+// carry limit ever arrives it belongs here, in one place.
+function addToInventory(item) { player.inventory.push(item); return item; }
+
+// Starting gear: four bound pieces that add up to the chosen kit's colours,
+// so a fresh character plays exactly as this prototype did before gear
+// existed -- and can immediately take a piece off and feel it.
+const STARTER_SLOTS = ["chest", "helmet", "hands", "boots"];
+function starterGear(kitKey) {
+  const kit = KITS[kitKey];
+  return Object.entries(kit.colors).map(([color, effect], i) =>
+    makeItem({
+      kind: STARTER_SLOTS[i % STARTER_SLOTS.length],
+      quality: "fine",
+      color, effect,
+      line: "the family forge",
+      material: "iron",
+      name: `${kit.name.replace(/'s kit$/, "")}'s ${KIND_NOUNS[STARTER_SLOTS[i % STARTER_SLOTS.length]][0]}`,
+    }));
+}
+
 /* ============================ state ============================ */
 
 let world = null, size = 0, cell = 10;
 let sites = [];          // eligible (non-ruined) starting sites
 let camps = [];          // visible bandit camps: { x, y, rooms, cleared }
 let chosenSite = null, chosenKit = null;
-let player = { x: 0, y: 0, kit: null };
+let player = { x: 0, y: 0, kit: null, equipment: emptyEquipment(), inventory: [] };
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("map"), ctx = canvas.getContext("2d");
@@ -502,7 +776,9 @@ function refreshBegin() {
 }
 
 $("beginBtn").addEventListener("click", () => {
-  player = { x: chosenSite.x, y: chosenSite.y, kit: chosenKit };
+  player = { x: chosenSite.x, y: chosenSite.y, kit: chosenKit,
+             equipment: emptyEquipment(), inventory: [] };
+  for (const it of starterGear(chosenKit)) equipItem(it);
   $("setup").style.display = "none";
   $("play").style.display = "block";
   canvas.width = canvas.height = cell * size;
@@ -513,14 +789,143 @@ $("beginBtn").addEventListener("click", () => {
 
 /* ============================ play screen ============================ */
 
+// Reads the doll, not the chosen kit -- unbind red and this panel says so.
 function buildKitPanel() {
-  const k = KITS[player.kit];
-  $("kitColours").innerHTML = Object.entries(k.colors).map(([c, eff]) => `
-    <div class="row">
-      <span class="sw" style="background:${COLOR_HEX[c]}">${EFFECT_ICON[eff] || ""}</span>
-      <span>${eff}</span>
-    </div>`).join("");
+  const kit = derivedKit(), mults = derivedMults();
+  $("kitColours").innerHTML = COLORS.map((c) => {
+    const eff = kit[c];
+    return `<div class="row">
+      <span class="sw" style="background:${COLOR_HEX[c]}${eff ? "" : ";opacity:.3"}">${eff ? (EFFECT_ICON[eff] || "") : ""}</span>
+      <span${eff ? "" : ' style="color:var(--dim)"'}>${eff || "inert"}${eff && mults[c] > 1 ? ` ×${mults[c]}` : ""}</span>
+    </div>`;
+  }).join("");
+  $("kitHp").textContent = `${derivedMaxHp()} max health · ${player.inventory.length} in the bag`;
 }
+
+/* ============================ character screen ============================ */
+
+let charOpen = false, invFilter = "all", invSort = "found";
+
+function openCharacter() {
+  charOpen = true;
+  $("play").style.display = "none";
+  $("character").style.display = "block";
+  renderCharacter();
+}
+function closeCharacter() {
+  charOpen = false;
+  $("character").style.display = "none";
+  $("play").style.display = "block";
+  buildKitPanel();
+  render();
+}
+$("openCharBtn").addEventListener("click", openCharacter);
+$("closeCharBtn").addEventListener("click", closeCharacter);
+
+function qualityClass(it) { return "q-" + it.quality; }
+function itemMetaLine(it) {
+  return `${it.quality} ${it.material} · ${it.line} · +${it.hp} hp`;
+}
+// The binding chip: colour swatch + effect, dimmed when another equipped
+// piece out-magnitudes this one for that colour (so a dead binding is
+// visible rather than silently ignored).
+function bindChip(it, owners) {
+  if (!it.color || !it.effect) return "";
+  const shadowed = owners && owners[it.color] && owners[it.color] !== it;
+  return `<span class="bind ${shadowed ? "shadowed" : "owned"}" title="${shadowed
+      ? "another equipped piece binds " + it.color + " more strongly" : it.color + " → " + it.effect}">
+    <span class="sw" style="background:${COLOR_HEX[it.color]}">${EFFECT_ICON[it.effect] || ""}</span>
+    ${it.effect}${it.mult > 1 ? ` ×${it.mult}` : ""}</span>`;
+}
+
+function renderCharacter() {
+  const owners = bindingOwners();
+  $("slotList").innerHTML = SLOTS.map((s) => {
+    const it = player.equipment[s.key];
+    if (!it) {
+      return `<div class="slot empty"><span class="label">${s.label}</span>
+        <span class="body"><span class="iname" style="color:var(--dim)">— empty —</span></span></div>`;
+    }
+    return `<div class="slot" data-unequip="${s.key}" title="take off">
+      <span class="label">${s.label}</span>
+      <span class="body">
+        <span class="iname ${qualityClass(it)}">${itemLabel(it)}</span>
+        <span class="imeta">${itemMetaLine(it)}</span>
+      </span>
+      ${bindChip(it, owners)}</div>`;
+  }).join("");
+
+  const kit = derivedKit(), mults = derivedMults();
+  $("charSummary").innerHTML = COLORS.map((c) => `
+    <div class="row"><span class="k">
+      <span class="sw" style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${COLOR_HEX[c]}"></span>
+      ${c}</span>
+      <span>${kit[c] ? `${kit[c]}${mults[c] > 1 ? ` ×${mults[c]}` : ""}` : "inert"}</span></div>`).join("")
+    + `<div class="row" style="margin-top:6px"><span class="k">max health</span><span>${derivedMaxHp()}</span></div>`;
+
+  renderInventory();
+}
+
+function renderInventory() {
+  const sel = $("invFilter");
+  if (!sel.options.length) {
+    sel.innerHTML = `<option value="all">every slot</option>`
+      + [...new Set(SLOTS.map((s) => s.kind))].map((k) =>
+        `<option value="${k}">${SLOTS.find((s) => s.kind === k).label.toLowerCase()}</option>`).join("");
+  }
+  sel.value = invFilter;
+  $("invSort").value = invSort;
+
+  let items = player.inventory.filter((it) => invFilter === "all" || it.kind === invFilter);
+  if (invSort === "quality") {
+    items = items.slice().sort((a, b) => b.mult - a.mult || b.hp - a.hp);
+  } else if (invSort === "slot") {
+    const order = Object.keys(KIND_NOUNS);
+    items = items.slice().sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || b.mult - a.mult);
+  } else {
+    items = items.slice().reverse();   // newest first
+  }
+
+  $("invCount").textContent = `${player.inventory.length} carried`
+    + (invFilter === "all" ? "" : ` · ${items.length} shown`);
+
+  const owners = bindingOwners();
+  $("invList").innerHTML = items.length ? items.map((it) => {
+    // What equipping this would do to max health, against whichever piece it
+    // would actually displace -- computed here rather than guessed, so it
+    // can't promise a number the equip won't deliver.
+    const target = SLOTS_FOR_KIND(it.kind).find((s) => !player.equipment[s.key])
+      || SLOTS_FOR_KIND(it.kind)[0];
+    const cur = player.equipment[target.key];
+    const d = it.hp - (cur ? cur.hp : 0);
+    return `<div class="slot" data-equip="${it.id}" title="equip into ${target.label}">
+      <span class="label">${target.label}</span>
+      <span class="body">
+        <span class="iname ${qualityClass(it)}">${itemLabel(it)}</span>
+        <span class="imeta">${itemMetaLine(it)}</span>
+      </span>
+      ${bindChip(it, owners)}
+      <span class="delta ${d > 0 ? "up" : d < 0 ? "down" : ""}">${d > 0 ? "+" : ""}${d || ""}</span>
+    </div>`;
+  }).join("") : `<div class="empty">Nothing carried. Gear drops when you win a fight.</div>`;
+}
+
+$("invFilter").addEventListener("change", (e) => { invFilter = e.target.value; renderInventory(); });
+$("invSort").addEventListener("change", (e) => { invSort = e.target.value; renderInventory(); });
+
+$("slotList").addEventListener("click", (ev) => {
+  const el = ev.target.closest("[data-unequip]");
+  if (!el) return;
+  unequipSlot(el.dataset.unequip);
+  renderCharacter();
+});
+$("invList").addEventListener("click", (ev) => {
+  const el = ev.target.closest("[data-equip]");
+  if (!el) return;
+  const it = player.inventory.find((i) => i.id === +el.dataset.equip);
+  if (it) equipItem(it);
+  renderCharacter();
+});
 
 function biomeAt(x, y) { return world.world.biomes[y][x]; }
 
@@ -578,7 +983,15 @@ const BIOME_NAME = {
 const STEP = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
                w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0] };
 document.addEventListener("keydown", (e) => {
+  // The character screen is reachable from the map and only from the map --
+  // never mid-fight, where swapping gear would rewrite the board's payouts
+  // halfway through a turn.
+  if (charOpen) {
+    if (e.key === "i" || e.key === "I" || e.key === "Escape") { e.preventDefault(); closeCharacter(); }
+    return;
+  }
   if ($("play").style.display === "none" || inCombat) return;
+  if (e.key === "i" || e.key === "I") { e.preventDefault(); openCharacter(); return; }
   const step = STEP[e.key] || STEP[e.key.toLowerCase()];
   if (!step) return;
   e.preventDefault();
@@ -634,6 +1047,12 @@ let inCombat = false;
 let cs = null; // combat state: board, kit colours, player/enemy hp+status, swipes, selection
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+// Rarity is magnitude: the gems are the same, the piece that binds the colour
+// decides what a match of them is worth. Single place both the payout and the
+// previews go through, so a preview can never disagree with the swap.
+function gemValue(color, gems) {
+  return Math.max(1, Math.round(gems * PER_GEM * ((cs && cs.mult[color]) || 1)));
+}
 function key(r, c) { return r * BOARD_SIZE + c; }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -726,10 +1145,16 @@ function hasMove(b) {
 // (called again for room 2, 3...) only replaces the board and enemy.
 function beginCombat(enemyDef, camp) {
   inCombat = true;
+  // Snapshot the gear's answers at the start of the fight -- combat asks
+  // these on every match, and re-deriving mid-cascade would be a chance for
+  // the numbers to move under a player who can't change gear from in here.
+  const maxHp = derivedMaxHp();
   cs = {
     board: null,
-    kit: KITS[player.kit].colors,
-    player: { hp: 60, maxHp: 60, block: 0, armour: 0, shield: 0, mana: 0 },
+    kit: derivedKit(),
+    mult: derivedMults(),
+    loot: [],
+    player: { hp: maxHp, maxHp, block: 0, armour: 0, shield: 0, mana: 0 },
     enemy: null,
     swipes: SWIPES_PER_TURN,
     selected: null,
@@ -742,9 +1167,10 @@ function beginCombat(enemyDef, camp) {
   $("play").style.display = "none";
   $("combat").style.display = "block";
   $("continueBtn").classList.add("hidden");
+  $("newloot").classList.add("hidden");
   $("endTurnBtn").classList.remove("hidden");
   $("combatTitle").textContent = camp ? `Bandit camp (${camp.rooms} rooms)` : "A wild encounter";
-  $("combatSub").textContent = KITS[player.kit].name;
+  $("combatSub").textContent = `${equippedItems().length} pieces worn · ${maxHp} health`;
   gemRowSig = null;
   renderCombat();
 }
@@ -793,7 +1219,7 @@ async function resolveCombatBoard() {
     const cleared = [];
     for (const { color, cells } of matches) {
       const effect = cs.kit[color];
-      if (effect) applyEffect(effect, cells.length * PER_GEM);
+      if (effect) applyEffect(effect, gemValue(color, cells.length));
       cleared.push(...cells);
     }
     const pace = Math.max(HOLD_FLOOR_MS, HOLD_MS - chain * HOLD_DECAY_MS);
@@ -872,6 +1298,14 @@ $("endTurnBtn").addEventListener("click", () => {
 function checkOutcome() {
   if (cs.enemy.hp <= 0) {
     logC(`The ${cs.enemy.name.toLowerCase()} is defeated!`, "good");
+    // Every kill drops a piece, but it is only CARRIED OUT on victory (see
+    // endCombat) -- a camp you die in room three of pays nothing. That puts
+    // the risk back on the decision to walk in, which is where DESIGN §6
+    // wants it, rather than on a per-room lottery. Camps roll quality twice
+    // and keep the better roll: the reason to take a marked camp over rats.
+    const drop = rollItem(cs.camp ? 2 : 1);
+    cs.loot.push(drop);
+    logC(`It drops ${itemLabel(drop)} (${drop.quality} ${drop.kind})`, "good");
     if (cs.camp && cs.roomsLeft > 1) {
       // More rooms in this camp -- stay in combat, no healing between
       // rooms, same rule the main dungeon crawl already uses.
@@ -893,6 +1327,18 @@ function checkOutcome() {
 }
 
 function endCombat(won) {
+  const lootEl = $("newloot");
+  if (won && cs.loot.length) {
+    for (const it of cs.loot) addToInventory(it);
+    lootEl.innerHTML = `<b>Taken:</b> ` + cs.loot.map((it) =>
+      `<span class="${qualityClass(it)}">${itemLabel(it)}</span>`).join(", ")
+      + ` — press <kbd>I</kbd> on the map to equip.`;
+    lootEl.classList.remove("hidden");
+  } else {
+    if (!won && cs.loot.length) logC(`${cs.loot.length} piece(s) of loot left on the floor.`, "hit");
+    lootEl.classList.add("hidden");
+  }
+  cs.loot = [];   // banked or forfeited; never carried into the next fight
   $("endTurnBtn").classList.add("hidden");
   $("continueBtn").classList.remove("hidden");
   $("continueBtn").onclick = () => {
@@ -900,6 +1346,7 @@ function endCombat(won) {
     $("combat").style.display = "none";
     $("play").style.display = "block";
     if (!won) { player.x = chosenSite.x; player.y = chosenSite.y; }
+    buildKitPanel();   // the bag count and any new max health from loot
     render();
   };
   renderCombat();
@@ -918,16 +1365,23 @@ function shownValueCombat(effect, value) {
 // Ported from heritage-playtest's renderGemRow() -- no Combos box, this
 // engine has no fusion to describe. Only rebuilt when the kit changes.
 function renderGemRow() {
-  const sig = COLORS.map((c) => cs.kit[c]).join("|");
+  // The signature includes the magnitudes, not just the effects -- swapping a
+  // fine helmet for a legendary one changes no effect name but every number
+  // in this row, and a sig that ignored it would leave the old numbers up.
+  const sig = COLORS.map((c) => `${cs.kit[c]}@${cs.mult[c] || 1}`).join("|");
   if (sig === gemRowSig) return;
   gemRowSig = sig;
   const cells = COLORS.map((c) => {
     const eff = cs.kit[c];
     if (!eff) {
-      return `<div class="gembox R"><div class="top"><span class="g">-</span><span>inert</span></div>`
-        + `<div class="rates">no effect bound</div></div>`;
+      // Reachable now that gear supplies the bindings: take every piece that
+      // binds blue off and blue really does nothing. Uses its own colour box,
+      // not red's -- an inert colour still has to be identifiable.
+      return `<div class="gembox ${c}" style="opacity:.55"><div class="top">`
+        + `<span class="g" style="color:${COLOR_HEX[c]}">–</span><span>inert</span></div>`
+        + `<div class="rates">nothing equipped binds ${c}</div></div>`;
     }
-    const rate = (n) => shownValueCombat(eff, n * PER_GEM);
+    const rate = (n) => shownValueCombat(eff, gemValue(c, n));
     const desc = (EFFECT_DESC[eff] || "").replace(/"/g, "&quot;");
     const tip = `${eff} -- ${desc}. ${rate(3)} / ${rate(4)} / ${rate(5)} for a match of 3 / 4 / 5 gems.`;
     return `<div class="gembox ${c}" title="${tip}">`
@@ -942,9 +1396,11 @@ function previewSwapCombat(r1, c1, r2, c2) {
   swapCells(cs.board, r1, c1, r2, c2);
   const hits = findMatches(cs.board).filter((m) =>
     m.cells.some(([r, c]) => (r === r1 && c === c1) || (r === r2 && c === c2)));
-  const out = hits.map((m) => {
+  // Inert colours are dropped, not shown as "?0" -- a match of them pays
+  // nothing, and the preview has to say nothing rather than something.
+  const out = hits.filter((m) => cs.kit[m.color]).map((m) => {
     const effect = cs.kit[m.color];
-    return { icon: EFFECT_ICON[effect] || "?", value: shownValueCombat(effect, m.cells.length * PER_GEM) };
+    return { icon: EFFECT_ICON[effect] || "?", value: shownValueCombat(effect, gemValue(m.color, m.cells.length)) };
   });
   swapCells(cs.board, r1, c1, r2, c2);
   return out.length ? out : null;
@@ -1030,7 +1486,17 @@ function buildCombatReport() {
   L.push(new Date().toISOString());
   L.push("");
   L.push(`kit            ${KITS[player.kit].name}`);
-  L.push(`colours        ${COLORS.map((c) => c + "=" + (cs.kit[c] || "inert")).join("  ")}`);
+  L.push(`colours        ${COLORS.map((c) => c + "=" + (cs.kit[c] || "inert")
+    + (cs.mult[c] > 1 ? `x${cs.mult[c]}` : "")).join("  ")}`);
+  // The gear IS the build, so a log without it can't explain its own numbers.
+  L.push("equipped");
+  for (const s of SLOTS) {
+    const it = player.equipment[s.key];
+    L.push(`  ${s.label.padEnd(10)} ${it ? `${itemLabel(it)} (${it.quality} ${it.material}, ${it.line})`
+      + (it.color ? ` [${it.color}=${it.effect}]` : "") : "-"}`);
+  }
+  L.push(`max health     ${cs.player.maxHp}`);
+  L.push(`carried        ${player.inventory.length} items`);
   L.push(`enemy          ${cs.enemy.name} (${cs.enemy.maxHp} hp)`);
   L.push(`camp           ${cs.camp ? `yes, room ${cs.roomsTotal - cs.roomsLeft + 1} of ${cs.roomsTotal}` : "no"}`);
   L.push("");
