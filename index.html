@@ -708,7 +708,7 @@
 // submission timestamp alone is not reliable (GitHub Pages deploy lag,
 // browser caching a stale page). Dated rather than semver, matching how the
 // rest of this file already dates its design notes.
-const GAME_VERSION = "2026-08-07d";
+const GAME_VERSION = "2026-08-07e";
 
 /* =====================================================================
    WHAT WE ARE TESTING RIGHT NOW  --  EDIT THIS FREELY
@@ -2080,23 +2080,41 @@ function placePendingVoids() {
 /* Void ('X') gem: a hardcoded effect, not bound to the player's own colour
    picks. See SEEDED_GEMS. */
 function applySeededGem(color, gemCount, tag) {
+  if (color !== "X") return;
   const t = currentTarget();
-  if (!t) return;
-  if (color === "X") {
-    const value = Math.floor(gemCount * PER_GEM * VOID_STRENGTH * valueMult);
-    const dealtVoid = dealDamage(t, value);
-    const selfhit = Math.max(1, Math.floor(dealtVoid * VOID_SELFHIT_FRAC));
-    player.hp -= selfhit;
-    if (swipeTally) swipeTally.selfDmg += selfhit;
+  const value = Math.floor(gemCount * PER_GEM * VOID_STRENGTH * valueMult);
+
+  /* The self-hit is the void's PRICE, and it is charged whether or not there
+     is anything left to spend the damage on.
+
+     This used to sit behind an early return on "no target", so a cascade that
+     outlived the enemies was completely free -- and a runaway cascade is
+     exactly the one that kills the field early and then keeps going. Measured
+     on a submitted run: 1,241 void gems matched for 109 self-damage, about one
+     per eleven gems, where one per three or four is what the rule implies.
+     Two thirds of the void a player matched cost them nothing.
+
+     It is also charged on `value` rather than on the damage actually dealt, so
+     it does not quietly shrink when the target is nearly dead. */
+  const selfhit = Math.max(1, Math.floor(value * VOID_SELFHIT_FRAC));
+  player.hp -= selfhit;
+  if (swipeTally) swipeTally.selfDmg += selfhit;
+
+  if (t) {
+    dealDamage(t, value);
     log(`${tag}: void gem hits ${t.name} for ${value} (and you for ${selfhit})`, "hit");
-    if (loadout.voidGift4pc) {
-      /* 4pc: the replacement is not counted here. It is counted from the
-         MATCHED cells in resolveBoard, so that a void swept up by a chain
-         gem's explosion is not replaced -- see the split there. All that
-         belongs to the match itself is the flat chip on every living enemy. */
-      for (const e of living()) dealDamage(e, 1);
-      log(`${tag}: the void chips every enemy for 1`, "hit");
-    }
+  } else {
+    log(`${tag}: the void has nothing left to hit -- it tears at you for ${selfhit}`, "hit");
+  }
+
+  if (loadout.voidGift4pc) {
+    /* 4pc: the replacement is not counted here. It is counted from the
+       MATCHED cells in resolveBoard, so that a void swept up by a chain
+       gem's explosion is not replaced -- see the split there. All that
+       belongs to the match itself is the flat chip on every living enemy. */
+    const alive = living();
+    for (const e of alive) dealDamage(e, 1);
+    if (alive.length) log(`${tag}: the void chips every enemy for 1`, "hit");
   }
 }
 
@@ -3470,6 +3488,10 @@ function buildReport() {
   } else {
     L.push("  mana             none (no colour bound to mana)");
   }
+  const voidSelf = stats.swipes.reduce((a, s) => a + s.selfDmg, 0);
+  if (voidSelf)
+    L.push(`  void self-damage ${voidSelf}   <- GROSS. "damage taken" above is net of healing,`
+           + ` so a build that heals can be paying far more for the void than it looks`);
   if (stats.ampPeak || stats.etherealPeak)
     L.push(`  peak stacks      amplify ${stats.ampPeak}/10   ethereal ${stats.etherealPeak}/10` +
            `   <- do the same-turn amps ever actually get stacked?`);
