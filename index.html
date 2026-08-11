@@ -774,27 +774,43 @@ const GAME_VERSION = "2026-08-08f";
    The longer version, with the reasoning behind each item, lives in
    docs/PLAYTESTING.md in the private repo -- keep them roughly in step.  */
 const TESTING_FOCUS = {
-  updated: "8 Aug 2026",
-  intro: "The void was rebuilt this round — it now grows, it can be cleared, it charges a "
-       + "price, and past a limit it kills. Nobody but me has played any of that yet, so "
-       + "the top two runs below are where a report is worth the most. Everything under "
-       + "them is still open from last round and still unanswered. Use the note box under "
-       + "the log during a run, and the comment box when you submit.",
+  updated: "11 Aug 2026",
+  intro: "Poison was rebuilt this round and nobody has ever played it — zero runs in the "
+       + "log across the whole project. It is no longer damage over time: it is a second "
+       + "front that fills the health bar from the LEFT while ordinary damage empties it "
+       + "from the right, and the target dies when the two meet. It cannot be blocked, "
+       + "cannot be healed off, and never recedes. Enemies also learned to have attacks "
+       + "you cannot stun out of. The top four runs are where a report is worth the most. "
+       + "The void runs came off — 22 logged runs is enough. Use the note box under the "
+       + "log during a run, and the comment box when you submit.",
   runs: [
-    { build: "Void's Gift, both pieces — try to keep the board under control",
-      why: "the void is a population now, not an event. Every blue gem you match grants "
-         + "one, matching a void gem puts it straight back, and the ONLY thing that "
-         + "removes one for good is a chain gem's explosion. So the question is whether "
-         + "that is a control you can actually work — can you steer the count down when "
-         + "it starts climbing, or does it get away from you no matter what you do?",
-      setup: { preset: "warden", sets: ["voidsGift", "voidsGift"] } },
-    { build: "Void's Gift + a build that swings big — watch VOID THIS TURN",
-      why: "the void can no longer grind you out: its self-damage always leaves you on 1 "
-         + "health, however long a cascade runs. Instead it kills outright if 500 void "
-         + "gems are matched in a single TURN, counted on the buff row. Nobody but me has "
-         + "seen that happen. Did the counter give you any warning you could act on, and "
-         + "if it killed you, did it feel like your own doing or like a dice roll?",
-      setup: { preset: "warden", sets: ["voidsGift", "voidsGift"] } },
+    { build: "Apocetharys Garb, both pieces — go all the way to the dragon",
+      why: "poison is a second front on the health bar, not a damage number. A 4chain "
+         + "plants a teal gem; setting it off pushes the enemy's bar in from the left by "
+         + "8% of its max health, permanently — no armour stops it and no heal takes it "
+         + "back. The dragon is the test, because 8% of 1600 is a lot and 8% of a rat is "
+         + "nothing. Watch the bar: does the closing gap read as progress you can feel, "
+         + "or does it just look like a slightly odd health bar?",
+      setup: { preset: "warden", sets: ["apocetharys", "apocetharys"] } },
+    { build: "Apocetharys 2pc only — one tier slot spent on poison",
+      why: "with one piece you only get the single-target gem, and it is competing with "
+         + "everything else a tier slot could do. Is poison worth a slot on its own, or "
+         + "is it only interesting doubled up?",
+      setup: { preset: "warden", sets: ["apocetharys", null] } },
+    { build: "the Mountain test pair — pick it under Encounters before you begin",
+      why: "two new encounters, both about attacks you CANNOT stun. A spikemancer is "
+         + "interruptible while he curls and sealed the moment he starts rolling; a "
+         + "turret does not care that you stunned the gnome who built it. The telegraph "
+         + "says SEALED once it is unstoppable, and a wasted stun jumps to another enemy "
+         + "instead of being swallowed. The question is whether you worked out the rule "
+         + "from playing, or just felt cheated.",
+      setup: { preset: "warden" } },
+    { build: "Apocetharys + Void's Gift, one piece each — the board-crowding test",
+      why: "a prediction worth breaking. Simulated, the two together put about 37% of the "
+         + "board into gems that the refill never replaces, and hard shapes — L, T, "
+         + "5chain — fall roughly 40%. If that is real you should FEEL the board go "
+         + "stiff, with fewer big shapes available. Did it?",
+      setup: { preset: "warden", sets: ["apocetharys", "voidsGift"] } },
     { build: "anything at all — just reach the goblin warren",
       why: "the warren ended 42% of all runs last round, in under two turns. The goblins "
          + "now start weak and warm up: 4 damage each on their first turn, 6 on the second, "
@@ -847,14 +863,19 @@ const TESTING_FOCUS = {
       + "game makes you fill every slot.",
     "<b>Two different tier pieces, or the same one twice?</b> Mixing is supposed to be worth it.",
     "Did the <b>goblin warren</b> still decide your run, one way or the other?",
-    "The <b>flashing damper is now on by default</b> for everyone, not just people whose "
-      + "system asks for it — a tester said the strobe was physically unpleasant. If the "
-      + "board is now harder to follow, or the damper is doing nothing you can see, say so.",
     "Every run log now ends with a <b>per-turn table</b> — swipes, matches, gems, deepest "
       + "cascade, biggest swipe. <b>If a row disagrees with what you watched happen, that "
       + "is the single most useful thing you can report.</b> A mismatch exactly like that "
       + "found the last bug: a run felt far less punishing than the rules said, and the "
       + "table showed why — the void was charging nothing once the enemies were dead.",
+    "Poison is reported on its own line in the log now, apart from damage dealt, because "
+      + "a point of it is worth more than a point of attack — it cannot be blocked, healed "
+      + "or undone. <b>Does the poison number in your log look proportionate to how much "
+      + "of the fight it actually did?</b> If poison did the work and the damage line still "
+      + "looks like the real story, the split is wrong.",
+    "Did an attack you tried to stun ever turn out to be <b>unstoppable</b>? The stun "
+      + "should have jumped to another enemy rather than vanishing. Did you notice where "
+      + "it went, and did the telegraph tell you in time to do anything about it?",
     "If a number in the log looked wrong, say so — one of last round's reports found a "
       + "bug that way (splash damage was not naming itself, so it read like the wrong "
       + "colour was attacking).",
