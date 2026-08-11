@@ -246,12 +246,14 @@
 <header>
   <h1>Heritage — overworld</h1>
   <span class="sub">choose a town, choose a kit, walk the world</span>
-  <span id="load">world file: <input type="file" id="file" accept=".json"></span>
+  <span id="load">world file: <input type="file" id="file" accept=".json">
+    <span class="sub" id="loadNote"></span></span>
 </header>
 
 <div id="empty">
-  <p><b>No world loaded.</b> Choose a world file above, or drag one onto this page.</p>
-  <p>There is a ready-made <code>sample-world.json</code> in this folder (seed 7, 500 years).</p>
+  <p><b>Loading the default world…</b></p>
+  <p>If this does not clear, choose a world file above or drag one onto the page.
+     There is a ready-made <code>sample-world.json</code> in this folder (seed 7, 500 years).</p>
 </div>
 
 <div id="setup">
@@ -726,6 +728,38 @@ function loadWorld(data) {
   buildTownGrid();
   buildKitGrid();
 }
+
+/* The default world loads itself, so the page is playable the moment it opens
+   rather than asking for an upload every single time. It is the SAME world on
+   every visit -- sample-world.json is seed 7 / 500 years, and camp placement
+   is derived from position rather than re-rolled -- so the map is a place you
+   can come to know between sessions, which is the whole point of a persistent
+   overworld.
+
+   The file input stays, as an override for trying a different world.
+
+   fetch() is blocked by CORS when this page is opened straight off disk as a
+   file:// URL, and that is a normal way to use this build (see README). So the
+   failure is expected rather than exceptional: say what happened, and fall
+   back to the picker that was always there. */
+const DEFAULT_WORLD = "sample-world.json";
+function loadDefaultWorld() {
+  fetch(DEFAULT_WORLD)
+    .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then((data) => {
+      loadWorld(data);
+      $("loadNote").textContent = "(default world loaded)";
+    })
+    .catch(() => {
+      $("empty").innerHTML =
+        "<p><b>No world loaded.</b> Choose a world file above, or drag one onto"
+        + " this page.</p><p>The default <code>" + DEFAULT_WORLD + "</code> could not"
+        + " be fetched \u2014 that is expected when this page is opened straight from"
+        + " disk, since browsers block file:// reads. It loads by itself on the"
+        + " hosted page.</p>";
+    });
+}
+loadDefaultWorld();
 
 $("file").addEventListener("change", (ev) => {
   const f = ev.target.files[0];
