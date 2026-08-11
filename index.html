@@ -17,6 +17,9 @@
     --Y: #dfb13a;
     --B: #4a8ede;
     --X: #7b5ea7;
+    /* Poison. Teal because it is neither a gem colour nor the void --
+       it is the one thing on the bar that never comes back. */
+    --teal: #2fb8a8;
     /* The hijacked socket. Void's Gift takes a colour over entirely, so the
        gems in it stop being that colour and start being the void's -- see the
        body.void-* rules below. Distinct from --X: this is still an ordinary
@@ -437,7 +440,18 @@
   .stat { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
   .stat span:last-child { font-weight: 700; }
   .bar { height: 6px; border-radius: 4px; background: var(--panel2); overflow: hidden; margin: 4px 0 10px; }
+  .bar { position: relative; }
   .bar > i { display: block; height: 100%; background: var(--G); transition: width .25s; }
+  /* The poison front. Sits UNDER the health fill and grows from the left, so
+     the two visibly close on each other; when they meet the target is dead. */
+  .bar > u { position: absolute; left: 0; top: 0; height: 100%; background: var(--teal);
+             transition: width .25s; z-index: 1; }
+  .bar > i { position: relative; z-index: 0; }
+  .pois { color: var(--teal); font-weight: 700; }
+  /* Interruptibility marks on a telegraph. SEALED is the one that
+     changes what the player should do, so it is the loud one. */
+  .tele .sealed { color: var(--R); font-weight: 700; letter-spacing: .04em; }
+  .tele .mark { color: var(--dim); font-weight: 700; }
   .bar.mana > i { background: var(--B); }
   /* Mana is uncapped, so a plain proportional bar pins at full exactly when
      you have the most and most need to read it. Notches every MANA_NOTCH mana
@@ -629,6 +643,12 @@
     </div>
     <div class="hint" id="spellLocked">No mana or focus socket, so no spells — bind a colour to either to earn a spellbook.</div>
 
+    <!-- Which encounters this run fights. Sits last because it is a decision
+         about the FIGHT rather than the build, and the mountain pair exists to
+         test two specific rules rather than to be a full run. -->
+    <h3 class="section-h">Encounters</h3>
+    <div class="cards" id="ladderCards"></div>
+
     <div class="hint" id="setupPreview"></div>
 
     <button class="beginbtn" id="beginBtn" disabled>Fill every socket to begin</button>
@@ -651,7 +671,7 @@
       <div class="side">
         <div class="panel statpanel">
           <div class="stat"><span>Health</span><span id="hpTxt"></span></div>
-          <div class="bar"><i id="hpBar"></i></div>
+          <div class="bar"><u id="hpPoison"></u><i id="hpBar"></i></div>
           <div class="stat" id="manaRow"><span>Mana</span><span id="manaTxt"></span></div>
           <div class="bar mana" id="manaBarRow"><i id="manaBar"></i></div>
           <div class="stat"><span>Block</span><span id="blockTxt"></span></div>
@@ -941,6 +961,11 @@ const SEEDED_GEMS = new Set(["X"]); // X = void (Void's Gift)
 const VOID_STRENGTH = 2.0;        // void gem match: pays this many times a normal attack hit
 const VOID_SELFHIT_FRAC = 0.05;   // ...and this fraction of that also hits the player
 const POISON_PCT_MAX_HP = 0.08;   // poison special gem detonation: this fraction of target's max hp
+/* How much of the player's poison front wears off between encounters, as a
+   fraction of max hp. PLACEHOLDER -- the rate is an open question, see
+   docs/OPEN-QUESTIONS.md "The poison resource". Poison DECAYS rather than
+   clearing, so a poison fight casts a shadow over the next one. */
+const POISON_DECAY_PER_ENCOUNTER = 0.25;
 
 /* Mana bar readability. A notch every MANA_NOTCH, with the scale growing in
    whole rows of MANA_NOTCH_ROW so a notch is always worth the same amount.
@@ -1615,13 +1640,59 @@ const ENCOUNTERS = [
     [["claw", 1, 26], ["tail sweep", 2, 40], ["BREATH", 3, 85]], 3)]],
 ];
 
+/* Turrets climb the longer they are left standing -- destroying the object IS
+   the clock, since stunning the gnome who built it does nothing. */
+const TURRET_RAMP = [1.0, 1.3, 1.6, 1.9, 2.2];
+
+/* The mountain biome's two test encounters. Both exist to put the
+   interruptibility rules (DESIGN.md Sec.8) in front of a player rather than in
+   front of a unit test: one enemy that seals PART WAY THROUGH its own wind-up,
+   and one that was never interruptible to begin with.
+
+   Sized on mechanical demand rather than health -- the dragon at 1600 is the
+   "hard" anchor, so neither of these goes near it. */
+const MOUNTAIN = [
+  // OPEN -> SEALED, mid-attack. Stun during the curl and the roll never
+  // happens; stun once he is rolling and the stun goes somewhere else. The
+  // answer is block and armour, or burst him during the curl.
+  ["Spikemancers on the high road", () => Array.from({ length: 2 }, (_, i) =>
+    mkEnemy("Dwarf spikemancer " + (i + 1), 220,
+            [["curl and ROLL", 2, 46, 1], ["shoulder barge", 1, 18]]))],
+  // SEALED from the start, because a turret does not care whether the gnome
+  // who built it is stunned. The gnomes ARE stunnable, so the encounter reads
+  // as "the stunnable half is not the dangerous half".
+  ["A gnome turret nest", () => [
+    mkEnemy("Gnome tinker", 120, [["wrench", 1, 12], ["recalibrate", 2, 22]]),
+    mkEnemy("Gnome tinker", 120, [["wrench", 1, 12], ["recalibrate", 2, 22]]),
+    mkEnemy("Turret", 120, [["autofire", 1, 14]], 1, TURRET_RAMP, true),
+    mkEnemy("Turret", 120, [["autofire", 1, 14]], 1, TURRET_RAMP, true),
+  ]],
+];
+
+/* Which encounters a run fights. Picked on the setup screen -- the mountain
+   pair is short on purpose, it tests two rules rather than being a full run. */
+const LADDERS = {
+  standard:   { label: "Standard ladder", note: "rat → bandits → ogre → warren → dragon, then endless", list: () => ENCOUNTERS },
+  mountain:   { label: "Mountain test pair", note: "spikemancers and a turret nest — stun is not the answer", list: () => MOUNTAIN },
+  everything: { label: "Everything", note: "the ladder and then the mountain pair, then endless", list: () => ENCOUNTERS.concat(MOUNTAIN) },
+};
+let ladder = "standard";
+
+/* The run's encounter list, and how many fights come before endless. Everything
+   downstream asks these rather than ENCOUNTERS directly, so a chosen ladder
+   changes the headers, the "cleared N of M" summary and the endless-wave
+   numbering all at once. */
+function runList() { return LADDERS[ladder] ? LADDERS[ladder].list() : ENCOUNTERS; }
+function runLength() { return runList().length; }
+
 /* After the dragon: escalating waves until the player falls. The run no longer
    ends in victory -- it ends when the world finds your limit. */
 function endlessWave(n) {
   const hpM = 1 + 0.25 * n, dmgM = 1 + 0.15 * n;
   const scaled = (name, hp, actions, resolve = 1, ramp = null) =>
     mkEnemy(name, Math.round(hp * hpM),
-            actions.map(([l, w, d]) => [l, w, Math.round(d * dmgM)]), resolve, ramp);
+            actions.map(a => a.length > 3 ? [a[0], a[1], Math.round(a[2] * dmgM), a[3]]
+                                  : [a[0], a[1], Math.round(a[2] * dmgM)]), resolve, ramp);
   const templates = [
     ["The warren stirs again", () => Array.from(
       { length: Math.min(8, 6 + Math.floor((n + 1) / 2)) },
@@ -1676,12 +1747,24 @@ const key = (r, c) => r * SIZE + c;
    stand up first. 9 damage becomes 4, then 6, then 9. */
 const SWARM_RAMP = [0.45, 0.7, 1];
 
-function mkEnemy(name, hp, actions, resolve = 1, ramp = null) {
+function mkEnemy(name, hp, actions, resolve = 1, ramp = null, sealed = false) {
   // resolve: how many stuns it takes to stagger this enemy. Each stun ticks
   // the meter (overflow rather than waste); at `resolve` ticks it loses its
   // action and the meter resets.
   const e = { name, hp, maxHp: hp, actions, bleed: 0, stunned: 0,
+              poison: 0,        // the poison FRONT -- fills the bar from the left, never recedes
+
               resolve, stunMeter: 0, ramp,
+              /* Interruptibility (DESIGN.md Sec.8). `sealed` is permanent and
+                 belongs to the CREATURE -- a turret does not care whether its
+                 builder is stunned. Sealing part way through a wind-up belongs
+                 to the ACTION instead and rides on the action tuple as an
+                 optional 4th element:
+                   ["curl and ROLL", 2, 46, 1]  OPEN at countdown 2, SEALED at 1
+                   ["shoulder barge", 1, 18]    interruptible like anything else
+                 Putting it on the enemy sealed every attack it owned, which
+                 made a spikemancer's ordinary shove as unstoppable as his roll. */
+              sealed,
               freezeStacks: 0,  // status effect: 3 stacks -> 1 stun, ticks the same stagger meter
               acidTurns: 0, acidDmg: 0,  // spell "Acid rain"
               confused: false,  // Major "confuse": next queued attack retargets to another enemy
@@ -1713,11 +1796,11 @@ function rampedDamage(e) {
   return Math.max(1, Math.round(raw * mult));
 }
 
-const living = () => enemies.filter(e => e.hp > 0);
+const living = () => enemies.filter(isAlive);
 function currentTarget() {
   const alive = living();
   if (!alive.length) return null;
-  if (!enemies[targetIdx] || enemies[targetIdx].hp <= 0) targetIdx = enemies.indexOf(alive[0]);
+  if (!enemies[targetIdx] || !isAlive(enemies[targetIdx])) targetIdx = enemies.indexOf(alive[0]);
   return enemies[targetIdx];
 }
 
@@ -1872,7 +1955,7 @@ const fullLog = [];
 const stats = {
   shapes: {}, specials: 0, fusions: 0, combos: 0, fusionPairs: {},
   spells: {}, turns: 0, dmgTaken: 0, encounters: [],
-  dmgDealt: 0, manaGained: 0, manaSpent: 0, manaPeak: 0, detonations: 0,
+  dmgDealt: 0, poisonDealt: 0, poisonTaken: 0, poisonPeak: 0, manaGained: 0, manaSpent: 0, manaPeak: 0, detonations: 0,
   ampPeak: 0, etherealPeak: 0, freezeStuns: 0, staggerTicks: 0,
   castsPerTurn: {},
   /* Per-swipe and per-turn shape of the run. These exist because the
@@ -1906,8 +1989,8 @@ const noteLog = [];
 function addNote(text) {
   text = (text || "").trim();
   if (!text) return false;
-  const where = encounter < ENCOUNTERS.length
-    ? `encounter ${encounter + 1}` : `endless wave ${encounter - ENCOUNTERS.length + 1}`;
+  const where = encounter < runLength()
+    ? `encounter ${encounter + 1}` : `endless wave ${encounter - runLength() + 1}`;
   noteLog.push(`[${where}, turn ${stats.turns + 1}] ${text}`);
   log(`### NOTE: ${text}`, "note");
   return true;
@@ -1953,12 +2036,45 @@ function dmgAmpFactor() {
 // Returns the amount ACTUALLY dealt, so callers log the real number rather
 // than the pre-amp one -- the run log is the balancing instrument, so it
 // must never report a number the game didn't do.
-function dealDamage(enemy, amount) {
+function dealDamage(enemy, amount, poison) {
+  /* poison=true is the ONE damage type that skips mitigation, and it does so
+     as a flag through this funnel rather than by touching hp itself (DESIGN.md
+     Sec.7 "Poison"). It advances the target's front instead: unamped, never
+     healed back, and counted in its own stat so the calibration anchor stays
+     clean. */
+  if (poison) return applyPoison(enemy, amount);
   const final = Math.round(amount * dmgAmpFactor());
   enemy.hp -= final;
   stats.dmgDealt += final;
   return final;
 }
+
+/* The poison FRONT. Ordinary damage empties the bar from the right; poison
+   fills it from the left and never recedes. The gap between the two fronts is
+   the real remaining health, and the target dies when they meet -- so a
+   full-health enemy at 100% poison is dead. Capped at maxHp because a full bar
+   IS death and there is nothing past it to store. */
+function applyPoison(enemy, amount) {
+  const gained = Math.max(0, Math.min(amount, enemy.maxHp - (enemy.poison || 0)));
+  enemy.poison = (enemy.poison || 0) + gained;
+  stats.poisonDealt += gained;
+  return gained;
+}
+
+/* The player's own front. Deliberately NOT routed through incomingDamage():
+   that funnel exists to apply mitigation, and poison has none by definition. */
+function poisonPlayer(amount) {
+  const gained = Math.max(0, Math.min(amount, player.maxHp - (player.poison || 0)));
+  player.poison = (player.poison || 0) + gained;
+  stats.poisonTaken += gained;
+  stats.poisonPeak = Math.max(stats.poisonPeak, player.poison);
+  if (gained) log(`poison spreads through you -- ${gained} (${player.poison}/${player.maxHp} of your bar is gone for good)`, "hurt");
+  return gained;
+}
+
+/* The single death test for both sides. Nothing compares hp to 0 directly:
+   that misses every poison kill, including one at full health. */
+function isAlive(u) { return u.hp > (u.poison || 0); }
 
 // Reduction lands BEFORE block/armour/shield: it shrinks the incoming hit,
 // and your defences then soak what is left of it.
@@ -2118,13 +2234,40 @@ function applyEffect(effect, value, tag, color) {
   }
 }
 
+/* Whether a stun can touch this enemy RIGHT NOW. Read at the moment the stun
+   lands and never cached -- the whole point is that the same attack is OPEN on
+   one turn and SEALED on the next. */
+function isSealed(e) {
+  if (e.sealed) return true;
+  const at = e.pending && e.pending.length > 3 ? e.pending[3] : null;
+  return at !== null && at !== undefined && e.countdown <= at;
+}
+
+/* DESIGN.md Sec.8 "sealed spill": a stun aimed at a SEALED target is never
+   consumed and never re-opens the target picker. It redirects to the nearest
+   enemy that can take it, scanning OUTWARD from the intended target so the
+   redirect is predictable, random on a tie. */
+function spillFromSealed(victim) {
+  const alive = living();
+  const i = alive.indexOf(victim);
+  if (i < 0) return null;
+  for (let d = 1; d < alive.length; d++) {
+    const near = [i - d, i + d]
+      .filter(j => j >= 0 && j < alive.length && !isSealed(alive[j]))
+      .map(j => alive[j]);
+    if (near.length) return pick(near);
+  }
+  return null;
+}
+
 function stunTarget() {
-  // Overflow rather than waste: spill onto an unstunned enemy first.
+  // Overflow rather than waste: spill onto an unstunned enemy first. A SEALED
+  // enemy is a redundant target for the same reason an already-stunned one is.
   const alive = living();
   if (!alive.length) return [null, false];
   const cur = currentTarget();
-  if (cur && !cur.stunned) return [cur, false];
-  for (const e of alive) if (!e.stunned) return [e, true];
+  if (cur && !cur.stunned && !isSealed(cur)) return [cur, false];
+  for (const e of alive) if (!e.stunned && !isSealed(e)) return [e, true];
   return [cur, false];
 }
 
@@ -2251,11 +2394,11 @@ function firePoisonGem() {
   const pct = Math.round(POISON_PCT_MAX_HP * 100);
   if (aoe) {
     let total = 0;
-    for (const e of targets) { total += dealDamage(e, Math.floor(e.maxHp * POISON_PCT_MAX_HP)); }
+    for (const e of targets) { total += dealDamage(e, Math.floor(e.maxHp * POISON_PCT_MAX_HP), true); }
     log(`** poison gem detonates on every enemy for ${pct}% max hp each (${total} total)`, "spec");
   } else {
     const e = targets[0];
-    const dmg = dealDamage(e, Math.floor(e.maxHp * POISON_PCT_MAX_HP));
+    const dmg = dealDamage(e, Math.floor(e.maxHp * POISON_PCT_MAX_HP), true);
     log(`** poison gem detonates on ${e.name} for ${dmg} (${pct}% max hp)`, "spec");
   }
 }
@@ -2265,12 +2408,12 @@ function firePoisonGem() {
    checked at the main resolution checkpoints instead. */
 function checkAceOfClubs() {
   if (!loadout.aceOfClubs2pc) return;
-  let newlyDead = enemies.filter(e => e.hp <= 0 && !e.exploded);
+  let newlyDead = enemies.filter(e => !isAlive(e) && !e.exploded);
   let guard = 0;
   while (newlyDead.length && guard++ < 20) {
     const e = newlyDead.shift();
     e.exploded = true;
-    const others = enemies.filter(o => o !== e && o.hp > 0);
+    const others = enemies.filter(o => o !== e && isAlive(o));
     if (!others.length) continue;
     const dmg = Math.max(1, Math.floor(e.maxHp * ACE_OF_CLUBS_EXPLODE_FRAC));
     others.forEach(o => dealDamage(o, dmg));
@@ -2278,7 +2421,7 @@ function checkAceOfClubs() {
     // 4pc: the chain only continues to whoever THAT explosion also killed
     // -- without it, 2pc alone still does its own single round of
     // explosions, it just never cascades into a second wave.
-    if (loadout.aceOfClubs4pc) newlyDead = newlyDead.concat(others.filter(o => o.hp <= 0 && !o.exploded));
+    if (loadout.aceOfClubs4pc) newlyDead = newlyDead.concat(others.filter(o => !isAlive(o) && !o.exploded));
   }
 }
 
@@ -2287,6 +2430,18 @@ function checkAceOfClubs() {
    meter gates both identically. */
 function applyStagger(victim, tag, note) {
   note = note || "";
+  if (isSealed(victim)) {
+    // Nothing pre-announces the seal, so THIS is the moment the player learns
+    // the attack sealed. Say so plainly, and never eat the stun for it.
+    const other = spillFromSealed(victim);
+    const what = victim.pending ? victim.pending[0] : "it";
+    if (!other) {
+      log(`>> ${tag} TRIGGER: ${victim.name}'s ${what} cannot be stopped — and nothing else can take the stun`, "spec");
+      return;
+    }
+    log(`>> ${tag} TRIGGER: ${victim.name}'s ${what} cannot be stopped — the stun spills to ${other.name}`, "spec");
+    return applyStagger(other, tag, note);
+  }
   if (victim.resolve > 1) {
     // Every stun ticks the meter -- even while the enemy is already down.
     // Extending a big enemy's stun costs as much as causing it, or one
@@ -2325,6 +2480,19 @@ function applyFreeze(victim, tag) {
        This is also the pool's main balance risk, and is instrumented:
        stats.freezeStuns counts resolve>1 enemies stunned this way. If the
        dragon's breath clock stops running in the logs, raise the cost. */
+    /* Freeze ignores RESOLVE. It does not ignore SEALED -- those are different
+       rules. Resolve is "how hard is this thing to stagger"; sealed is "the
+       attack has already left its author", and nothing reaches back into a
+       rolling boulder or an armed mine. */
+    if (isSealed(victim)) {
+      const other = spillFromSealed(victim);
+      if (!other) {
+        log(`>> ${tag}: ${victim.name} freezes solid, but what is already coming cannot be stopped`, "spec");
+        return;
+      }
+      log(`>> ${tag}: ${victim.name} freezes solid, but what is already coming cannot be stopped — it spills to ${other.name}`, "spec");
+      victim = other;
+    }
     victim.stunned += 1;
     if (victim.resolve > 1) stats.freezeStuns++;
     log(`>> ${tag}: ${victim.name} freezes solid — stunned (ignores resolve)`, "spec");
@@ -2956,7 +3124,7 @@ async function resolveBoard() {
        crosses the line rather than after the board has finished unravelling --
        the player should see WHICH cascade step killed them. */
     voidsMatchedThisTurn += matchedVoids;
-    if (voidsMatchedThisTurn >= VOID_LETHAL_MATCHES && player.hp > 0) {
+    if (voidsMatchedThisTurn >= VOID_LETHAL_MATCHES && isAlive(player)) {
       log(`THE VOID TAKES YOU -- ${voidsMatchedThisTurn} void gems matched this turn `
         + `(the limit is ${VOID_LETHAL_MATCHES})`, "hit");
       player.hp = 0;
@@ -3425,7 +3593,7 @@ function afterAction() {
   // The tutorial owns win/lose while it is running: the dummy cannot realistically
   // kill you and must not end the lesson if it somehow dies.
   if (tutorialStep >= 0) return tutorialTick();
-  if (player.hp <= 0) return finish(false);
+  if (!isAlive(player)) return finish(false);
   if (!living().length) return nextEncounter();
 }
 
@@ -3445,7 +3613,7 @@ function closeEncounter(outcome) {
 function nextEncounter() {
   closeEncounter("cleared");
   encounter++;
-  if (encounter === ENCOUNTERS.length) {
+  if (encounter === runLength()) {
     log("— the dragon is dead, and the world sends worse —", "turn");
     log("ENDLESS MODE: escalating waves until you fall. Every death is data.", "turn");
   }
@@ -3541,12 +3709,12 @@ function buildReport() {
   L.push(`loadout        ${loadout.name} (${loadout.hp} hp)`);
   L.push(`colours        ${COLORS.map(c => c + "=" + (effectLabel(loadout, c) || "inert")).join("  ")}`);
   L.push(`triggers       ${Object.entries(loadout.shapes).map(([s, t]) => s + " -> " + t).join("  ")}`);
-  const waves = Math.max(0, cleared - ENCOUNTERS.length);
-  L.push(`result         cleared ${Math.min(cleared, ENCOUNTERS.length)} of ${ENCOUNTERS.length}` +
+  const waves = Math.max(0, cleared - runLength());
+  L.push(`result         cleared ${Math.min(cleared, runLength())} of ${runLength()}` +
          (waves ? ` +${waves} endless wave(s)` : "") +
-         (player.hp <= 0 ? (encounter < ENCOUNTERS.length
+         (!isAlive(player) ? (encounter < runLength()
            ? `, died in encounter ${encounter + 1}`
-           : `, died in endless wave ${encounter - ENCOUNTERS.length + 1}`) : ""));
+           : `, died in endless wave ${encounter - runLength() + 1}`) : ""));
   L.push(`health         ${Math.max(0, player.hp)}/${player.maxHp}`);
   L.push(`turns          ${stats.turns}`);
   L.push(`damage taken   ${stats.dmgTaken}`);
@@ -3807,9 +3975,9 @@ function finish(won) {
   closeEncounter(won ? "cleared" : "died");
   document.getElementById("game").classList.add("hidden");
   document.getElementById("over").classList.remove("hidden");
-  const where = encounter < ENCOUNTERS.length
-    ? `encounter ${encounter + 1} of ${ENCOUNTERS.length}`
-    : `endless wave ${encounter - ENCOUNTERS.length + 1}`;
+  const where = encounter < runLength()
+    ? `encounter ${encounter + 1} of ${runLength()}`
+    : `endless wave ${encounter - runLength() + 1}`;
   document.getElementById("overTitle").textContent = won ? "The dragon is dead." : "You died.";
   document.getElementById("overText").textContent = won
     ? `You got through the whole thing on ${player.hp}/${player.maxHp} health.`
@@ -4291,6 +4459,7 @@ function render(fresh) {
   const q = id => document.getElementById(id);
   q("hpTxt").textContent = `${Math.max(0, player.hp)} / ${player.maxHp}`;
   q("hpBar").style.width = Math.max(0, (player.hp / player.maxHp) * 100) + "%";
+  q("hpPoison").style.width = Math.max(0, ((player.poison || 0) / player.maxHp) * 100) + "%";
   /* One notch per MANA_NOTCH. The bar's scale grows in whole rows of
      MANA_NOTCH_ROW so the notches never resize under you -- a notch is always
      the same amount of mana, you just get more of them. */
@@ -4366,17 +4535,26 @@ function render(fresh) {
     b.onclick = () => cast(b.dataset.spell));
 
   q("enemies").innerHTML = enemies.map((e, i) => {
-    if (e.hp <= 0) return `<div class="enemy dead"><div class="top"><span>${e.name}</span><span>dead</span></div></div>`;
+    if (!isAlive(e)) return `<div class="enemy dead"><div class="top"><span>${e.name}</span><span>dead</span></div></div>`;
     const now = e.countdown <= 1;
     const tele = e.stunned
       ? `stunned${e.stunned > 1 ? " x" + e.stunned : ""}`
       : `${e.pending[0]} — ${rampedDamage(e)} dmg, ${now ? "NOW" : "in " + e.countdown}`
+        /* The interruptibility mark, showing the state the attack is in RIGHT
+           NOW and never one it will gain later (DESIGN.md Sec.8). A spikemancer
+           shows nothing while he curls and SEALED once he is already rolling —
+           discovering that is how the player learns the creature. */
+        + (isSealed(e) ? ` <b class="sealed">SEALED</b>`
+                       : e.resolve > 1 ? ` <b class="mark">RESOLVE ${e.resolve}</b>` : "")
         + (e.stunMeter ? ` [staggered ${e.stunMeter}/${e.resolve}]` : "");
     const portrait = ENEMY_ART[e.name] ? `<img class="portrait" src="${ENEMY_ART[e.name]}" alt="">` : "";
     return `<div class="enemy ${e === currentTarget() ? "target" : ""}" data-i="${i}">
       <div class="top"><span class="who">${portrait}${e.name}${e.bleed ? `<span class="tag">bleed ${e.bleed}</span>` : ""}</span>
-      <span>${Math.max(0, e.hp)}/${e.maxHp}</span></div>
-      <div class="bar"><i style="width:${Math.max(0, (e.hp / e.maxHp) * 100)}%"></i></div>
+      <span>${Math.max(0, e.hp)}/${e.maxHp}${e.poison ? ` <b class="pois">-${e.poison}</b>` : ""}</span></div>
+      <!-- Two fronts on one bar: the fill is what is LEFT, the teal
+           underlay is the poison that has eaten the bar from the left and
+           will never come back. They meet at death. -->
+      <div class="bar"><u style="width:${Math.max(0, ((e.poison || 0) / e.maxHp) * 100)}%"></u><i style="width:${Math.max(0, (e.hp / e.maxHp) * 100)}%"></i></div>
       <div class="tele ${now && !e.stunned ? "now" : ""}">${tele}</div></div>`;
   }).join("");
   q("enemies").querySelectorAll(".enemy[data-i]").forEach(d =>
@@ -4402,8 +4580,8 @@ const TUTORIAL_ENCOUNTER = ["A training dummy",
 
 function encounterDef(i) {
   if (tutorialStep >= 0 || TUTORIAL_ACTIVE) return TUTORIAL_ENCOUNTER;
-  return i < ENCOUNTERS.length ? ENCOUNTERS[i]
-                               : endlessWave(i - ENCOUNTERS.length + 1);
+  return i < runLength() ? runList()[i]
+                               : endlessWave(i - runLength() + 1);
 }
 
 function startEncounter() {
@@ -4421,6 +4599,10 @@ function startEncounter() {
   board = newBoard();
   special = emptySpecials();
   player.mana = 0;               // mana, armour and shield reset between combats
+  // Poison is the one status that SURVIVES a fight. It wears off rather than
+  // clearing -- resetting it here would undo the whole point of it.
+  player.poison = Math.max(0, (player.poison || 0)
+                              - Math.round(player.maxHp * POISON_DECAY_PER_ENCOUNTER));
   player.block = 0;
   player.armour = 0;
   player.shield = 0;
@@ -4457,9 +4639,9 @@ function startEncounter() {
   // one fight, but does not carry into the next one.
   swipes = SWIPES_PER_TURN;
   document.getElementById("encName").textContent = title;
-  document.getElementById("encSub").textContent = encounter < ENCOUNTERS.length
-    ? `Encounter ${encounter + 1} of ${ENCOUNTERS.length} — ${loadout.name}`
-    : `ENDLESS — wave ${encounter - ENCOUNTERS.length + 1} — ${loadout.name}`;
+  document.getElementById("encSub").textContent = encounter < runLength()
+    ? `Encounter ${encounter + 1} of ${runLength()} — ${loadout.name}`
+    : `ENDLESS — wave ${encounter - runLength() + 1} — ${loadout.name}`;
   log(`— ${title} —`, "turn");
   render(true);
 }
@@ -4924,7 +5106,7 @@ function startTutorial() {
 
 function begin(picksArg, setKeys, tutorial) {
   loadout = buildLoadout(picksArg, setKeys);
-  player = { hp: loadout.hp, maxHp: loadout.hp, mana: 0, block: 0, armour: 0,
+  player = { hp: loadout.hp, maxHp: loadout.hp, poison: 0, mana: 0, block: 0, armour: 0,
              shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0,
              dmgAmpStacks: 0, etherealStacks: 0,
              doubleNextSwipe: false, nextSpellFree: false, dodgeStacks: 0, dodgeCharges: 0,
@@ -5081,6 +5263,8 @@ function refreshSetupSelection() {
     c.classList.toggle("selected", picks.line5 === c.dataset.gem));
   document.querySelectorAll("#gemUltimate .card").forEach(c =>
     c.classList.toggle("selected", picks.ultimate === c.dataset.gem));
+  document.querySelectorAll("#ladderCards .card").forEach(c =>
+    c.classList.toggle("selected", c.dataset.ladder === ladder));
   document.querySelectorAll("#setCards .card").forEach(c => {
     const k = c.dataset.k;
     const inSlot1 = pickedSet1 === k, inSlot2 = pickedSet2 === k;
@@ -5128,6 +5312,13 @@ document.getElementById("setCards").innerHTML =
   Object.entries(SETS).map(([k, s]) => setCardHtml(k, s)).join("");
 document.getElementById("presetCards").innerHTML =
   Object.entries(PRESETS).map(([k, p]) => presetCardHtml(k, p)).join("");
+document.getElementById("ladderCards").innerHTML =
+  Object.entries(LADDERS).map(([k, l]) =>
+    `<div class="card" data-ladder="${k}"><h3>${l.label}</h3><p>${l.note}</p></div>`).join("");
+document.querySelectorAll("#ladderCards .card").forEach(c => c.onclick = () => {
+  ladder = c.dataset.ladder;
+  refreshSetupSelection();
+});
 
 document.querySelectorAll("#colourSockets .card, #gemLine4 .card").forEach(c => c.onclick = () => {
   picks[c.dataset.slot] = c.dataset.gem;
