@@ -470,7 +470,7 @@
              transition: width .25s; z-index: 1; }
   .bar > i { position: relative; z-index: 0; }
   .pois { color: var(--teal); font-weight: 700; }
-  .kit { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+  .kit { display: flex; flex-wrap: wrap; gap: 6px; }
   .kit .kithead { width: 100%; color: var(--teal); font-size: 12px;
                   letter-spacing: .04em; margin-bottom: 4px; }
   .kit button { border-color: var(--teal); }
@@ -704,7 +704,12 @@
           <div class="stat" style="margin-top:6px"><span>Swipes left</span><span id="swipeTxt"></span></div>
           <div id="buffs"></div>
         </div>
-        <div class="panel" id="spellPanel"><div class="spells" id="spells"></div><div class="spells kit hidden" id="poisonKit"></div></div>
+        <div class="panel" id="spellPanel"><div class="spells" id="spells"></div></div>
+        <!-- Its OWN panel, not a row inside the spell panel: that one is
+             hidden wholesale for a build with no spells, which took the
+             apothecary kit down with it and left a no-mana build earning
+             tokens it had no way to spend. -->
+        <div class="panel hidden" id="poisonPanel"><div class="spells kit" id="poisonKit"></div></div>
         <div class="panel endpanel"><button class="endbtn" id="endBtn">End turn</button></div>
         <div class="panel" id="enemies"></div>
         <div class="panel logpanel">
@@ -1187,6 +1192,7 @@ const EFFECT_ICON = {
   // Not a socketable effect -- what effectLabel reports for blue once Void's
   // Gift has taken it over, so the legend has an icon to draw.
   void: "☠",
+  poison: "✚",
 };
 // Seeded gems (see SEEDED_GEMS) aren't bound to loadout.colors at all -- a
 // fixed icon per colour letter, looked up directly instead of through
@@ -1199,6 +1205,7 @@ const EFFECT_DESC = {
   mana: "fuel for spells, carries across the fight",
   splash: "damage to every enemy except your target",
   void: "this colour is hijacked -- matching it spawns void gems instead of paying anything",
+  poison: "this colour is hijacked -- matching it spawns teal poison gems instead of paying anything. Match those to bank tokens",
   armour: "absorbs damage and KEEPS across turns (third rate)",
   lifesteal: "heals you (half rate); past full it builds a shield instead",
   wild_charge: "no direct effect -- builds toward a free random spell",
@@ -1220,6 +1227,10 @@ function effectLabel(l, c) {
   // the socket you picked is overridden, and a legend still showing it would
   // be describing a payout that never arrives.
   if (c === VOID_COLOUR && l.voidGift2pc) return "void";
+  // Same for the apothecary. Without this green reads "inert" in the gem
+  // reference -- true of the effect, badly wrong about the gem, and on a build
+  // whose whole income comes from matching it.
+  if (c === POISON_COLOUR && l.apocetharys2pc) return "poison";
   return l.colors[c] || (c === l.wildChargeColor ? "wild_charge" : null);
 }
 const TRIGGER_DESC = {
@@ -4682,11 +4693,10 @@ function render(fresh) {
      their cost the way spell buttons do, and grey out when unaffordable, so a
      button never offers something usePoisonAbility() would refuse. */
   const kit = q("poisonKit");
+  q("poisonPanel").classList.toggle("hidden", !loadout.apocetharys2pc);
   if (!loadout.apocetharys2pc) {
     kit.innerHTML = "";
-    kit.classList.add("hidden");
   } else {
-    kit.classList.remove("hidden");
     const held = player.poisonTokens || 0;
     kit.innerHTML = `<div class="kithead">Apothecary — <b>${held}</b> token${held === 1 ? "" : "s"}</div>`
       + Object.entries(POISON_ABILITIES).map(([n, a]) =>
