@@ -301,11 +301,11 @@
   .gem.Y { background-color: var(--Y); background-image: url(graphics/yellowgem.png); }
   .gem.B { background-color: var(--B); background-image: url(graphics/bluegem.png); }
   .gem.X { background-color: var(--X); background-image: url(graphics/voidgem.png); }
-  /* A gem carrying the poison special wears teal, the same way the void wears
-     purple -- it is its own thing on the board, not somebody else's gem with a
+  /* The poison gem wears teal, the same way the void wears purple -- it is its own thing on the board, not somebody else's gem with a
      letter added. There is no teal gem art yet, so the green art is recoloured
      by blending its luminosity over the teal fill: it keeps the drawn facets
      and takes the new hue. Swap in real art and this rule can lose the blend. */
+  .gem.P,
   .gem.poisongem {
     background-color: var(--teal);
     background-image: url(graphics/greengem.png);
@@ -320,6 +320,14 @@
   body.void-Y .gem.Y, body.void-B .gem.B {
     background-color: var(--VOID-SLOT);
     background-image: url(graphics/purplegem.png);
+  }
+  /* Same idea for the apothecary: the colour it hijacks pays nothing and only
+     spawns teal gems, so a socket that still looked green would be lying. */
+  body.pois-R .gem.R, body.pois-G .gem.G,
+  body.pois-Y .gem.Y, body.pois-B .gem.B {
+    background-color: var(--teal);
+    background-image: url(graphics/greengem.png);
+    background-blend-mode: luminosity;
   }
   .gem.sel { box-shadow: 0 0 0 3px #fff inset; transform: scale(.88); }
   .gem.adj { box-shadow: 0 0 0 2px rgba(255,255,255,.35) inset; }
@@ -462,6 +470,10 @@
              transition: width .25s; z-index: 1; }
   .bar > i { position: relative; z-index: 0; }
   .pois { color: var(--teal); font-weight: 700; }
+  .kit { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+  .kit .kithead { width: 100%; color: var(--teal); font-size: 12px;
+                  letter-spacing: .04em; margin-bottom: 4px; }
+  .kit button { border-color: var(--teal); }
   /* Interruptibility marks on a telegraph. SEALED is the one that
      changes what the player should do, so it is the loud one. */
   .tele .sealed { color: var(--R); font-weight: 700; letter-spacing: .04em; }
@@ -692,7 +704,7 @@
           <div class="stat" style="margin-top:6px"><span>Swipes left</span><span id="swipeTxt"></span></div>
           <div id="buffs"></div>
         </div>
-        <div class="panel" id="spellPanel"><div class="spells" id="spells"></div></div>
+        <div class="panel" id="spellPanel"><div class="spells" id="spells"></div><div class="spells kit hidden" id="poisonKit"></div></div>
         <div class="panel endpanel"><button class="endbtn" id="endBtn">End turn</button></div>
         <div class="panel" id="enemies"></div>
         <div class="panel logpanel">
@@ -992,7 +1004,7 @@ const ARCHMAGE_BENEFICIAL_MISFIRE_CHANCE = 0.3;
 // this (a matchable board colour), but the designer's follow-up redefined
 // it as a real special/chain gem instead (see "poison" handling in
 // detonateAll/doFuse), so it no longer belongs here.
-const SEEDED_GEMS = new Set(["X"]); // X = void (Void's Gift)
+const SEEDED_GEMS = new Set(["X", "P"]); // X = void (Void's Gift), P = poison (Apocetharys)
 const VOID_STRENGTH = 2.0;        // void gem match: pays this many times a normal attack hit
 const VOID_SELFHIT_FRAC = 0.05;   // ...and this fraction of that also hits the player
 const POISON_PCT_MAX_HP = 0.08;   // poison special gem detonation: this fraction of target's max hp
@@ -1001,6 +1013,31 @@ const POISON_PCT_MAX_HP = 0.08;   // poison special gem detonation: this fractio
    docs/OPEN-QUESTIONS.md "The poison resource". Poison DECAYS rather than
    clearing, so a poison fight casts a shadow over the next one. */
 const POISON_DECAY_PER_ENCOUNTER = 0.25;
+
+/* ---- the poison economy ----
+   Apocetharys hijacks a colour exactly as Void's Gift does: the socket pays
+   nothing and every gem of it matched spawns a teal poison gem instead. The
+   difference is what happens next. A matched VOID gem comes straight back; a
+   matched POISON gem is gone for good and pays a TOKEN. The void is a
+   population that feeds itself and takes the board over; poison is a resource
+   you accumulate and spend -- which is the whole distinction between the sets.
+
+   Tokens buy one of two things from one pool, so every turn asks the same
+   question: cash out and survive, or hold the dose and kill. Deliberately only
+   two sinks -- a board-wide miasma was cut, because the tension is what makes
+   the resource interesting and a third option that is simply "more damage"
+   dilutes the choice rather than deepening it.
+
+   EVERY NUMBER HERE IS A PLACEHOLDER awaiting logged play (see
+   docs/OPEN-QUESTIONS.md). The rule they must respect: a point of poison is
+   worth MORE than a point of attack -- unmitigated, unhealable, permanent --
+   so poison must buy fewer points than an attack match. */
+const POISON_COLOUR = "G";
+const POISON_TOKENS_PER_GEM = 1;      // doubled by the 4pc
+const POISON_ABILITIES = {
+  tend:   { cost: 3, value: 18,   label: "Tend",   desc: "heal 18" },
+  dose:   { cost: 2, value: 0.06, label: "Dose",   desc: "6% of the target's max hp, permanently" },
+};
 
 /* Mana bar readability. A notch every MANA_NOTCH, with the scale growing in
    whole rows of MANA_NOTCH_ROW so a notch is always worth the same amount.
@@ -1154,7 +1191,7 @@ const EFFECT_ICON = {
 // Seeded gems (see SEEDED_GEMS) aren't bound to loadout.colors at all -- a
 // fixed icon per colour letter, looked up directly instead of through
 // effectLabel().
-const SEEDED_GEM_ICON = { X: "☠" };
+const SEEDED_GEM_ICON = { X: "☠", P: "✚" };
 const EFFECT_DESC = {
   attack: "damage to your target",
   bleed: "stacks that tick every turn",
@@ -1473,9 +1510,12 @@ const SETS = {
   },
   apocetharys: {
     name: "Apocetharys Garb",
-    twoPcBlurb: "4chain also plants a dormant poison gem on the board -- swipe it into another chain gem, or catch it in a cascading explosion, to detonate it for " + Math.round(POISON_PCT_MAX_HP * 100) + "% of your target's max hp",
-    fourPcBlurb: "5chain plants one too, and any poison gem's detonation instead hits every living enemy at once for the same amount",
-    twoPc: { apocetharys2pc: true },
+    twoPcBlurb: COLOUR_NAME[POISON_COLOUR] + " BELONGS TO THE APOTHECARY. Whatever you socket into it does nothing -- matching it spawns teal poison gems instead. Match those and they are gone for good, paying tokens to spend on healing or on a dose of poison",
+    fourPcBlurb: "every poison gem you match pays " + (POISON_TOKENS_PER_GEM * 2) + " tokens instead of " + POISON_TOKENS_PER_GEM,
+    /* Same mechanism as Void's Gift: the override strips the colour from
+       loadout.colors entirely, so it pays no effect anywhere and stops
+       counting toward spellbook slots if it was socketed as mana. */
+    twoPc: { apocetharys2pc: true, colorOverrides: { [POISON_COLOUR]: null } },
     fourPc: { apocetharys4pc: true },
   },
 };
@@ -1755,6 +1795,7 @@ let triggerRepeat = 1;  // Power "swipe_multiplier" -- SWIPE_MULT_TRIGGER_COUNT 
    away. Never by a blast: chain-gem explosions are the one thing that clears
    voids for good, which is the player's only lever on the population. */
 let voidsPending = 0;
+let poisonPending = 0;
 /* Void gems matched during the TURN now resolving -- the lethal threshold is
    per turn, so this outlives any one swipe. Reset in endTurn. */
 let voidsMatchedThisTurn = 0;
@@ -1990,7 +2031,8 @@ const fullLog = [];
 const stats = {
   shapes: {}, specials: 0, fusions: 0, combos: 0, fusionPairs: {},
   spells: {}, turns: 0, dmgTaken: 0, encounters: [],
-  dmgDealt: 0, poisonDealt: 0, poisonTaken: 0, poisonPeak: 0, manaGained: 0, manaSpent: 0, manaPeak: 0, detonations: 0,
+  dmgDealt: 0, poisonDealt: 0, poisonTaken: 0, poisonPeak: 0,
+  poisonTokensEarned: 0, poisonTokensSpent: 0, poisonAbilities: {}, manaGained: 0, manaSpent: 0, manaPeak: 0, detonations: 0,
   ampPeak: 0, etherealPeak: 0, freezeStuns: 0, staggerTicks: 0,
   castsPerTurn: {},
   /* Per-swipe and per-turn shape of the run. These exist because the
@@ -2341,6 +2383,16 @@ function seedGems(color, count, avoidExisting) {
    earned them. Draining per cascade step satisfies both: the board has just
    settled so nothing can eat them, and they appear while the swipe is still
    resolving, where the next cascade can pick them up. */
+/* Put the owed teal gems on the board, at the end of each cascade STEP for
+   exactly the reasons placePendingVoids() documents. Unlike the void these are
+   TERMINAL -- nothing re-owes them when matched. */
+function placePendingPoison() {
+  if (!poisonPending) return;
+  const placed = seedGems("P", poisonPending, true);
+  if (placed) log(`the apothecary's gems settle — ${placed} teal gem(s)`, "spec");
+  poisonPending = 0;
+}
+
 function placePendingVoids() {
   if (!voidsPending) return;
   const placed = seedGems("X", voidsPending, true);
@@ -2352,6 +2404,18 @@ function placePendingVoids() {
 /* Void ('X') gem: a hardcoded effect, not bound to the player's own colour
    picks. See SEEDED_GEMS. */
 function applySeededGem(color, gemCount, tag) {
+  /* Poison gems pay TOKENS and are simply gone -- nothing re-owes them the way
+     a matched void gem is re-owed, so the population is spawn-limited and
+     cannot run away. That is the mechanical difference between a resource and
+     an infestation. */
+  if (color === "P") {
+    const per = POISON_TOKENS_PER_GEM * (loadout.apocetharys4pc ? 2 : 1);
+    const gained = gemCount * per;
+    player.poisonTokens = (player.poisonTokens || 0) + gained;
+    stats.poisonTokensEarned += gained;
+    log(`${tag}: ${gemCount} poison gem(s) harvested — +${gained} token(s) (you hold ${player.poisonTokens})`, "spec");
+    return;
+  }
   if (color !== "X") return;
   const t = currentTarget();
   const value = Math.floor(gemCount * PER_GEM * VOID_STRENGTH * valueMult);
@@ -2534,6 +2598,37 @@ function applyFreeze(victim, tag) {
   } else {
     log(`>> ${tag}: ${victim.name} freezing ${victim.freezeStacks}/${FREEZE_STACKS_THRESHOLD}`, "spec");
   }
+}
+
+/* Spend banked tokens. Two sinks competing for one pool: survive now, or poison
+   one target. The decision is the point -- a token spent
+   on turn one is worth more than the same token on turn six, because poison is
+   permanent and shrinks the pool everything else has to chew through, while a
+   heal is worth nothing until you need it. */
+function usePoisonAbility(name) {
+  if (!loadout.apocetharys2pc) return "your build has no apothecary's kit";
+  const spec = POISON_ABILITIES[name];
+  if (!spec) return "no such ability";
+  if ((player.poisonTokens || 0) < spec.cost)
+    return `not enough poison tokens (${player.poisonTokens || 0}/${spec.cost})`;
+  player.poisonTokens -= spec.cost;
+  stats.poisonTokensSpent += spec.cost;
+  stats.poisonAbilities[name] = (stats.poisonAbilities[name] || 0) + 1;
+
+  if (name === "tend") {
+    const healed = Math.min(spec.value, player.maxHp - player.hp);
+    player.hp += healed;
+    /* The player's own poison front is NOT pushed back. Healing moves the
+       other end of the bar; the front never recedes mid-fight (DESIGN Sec.7),
+       so an apothecary drowning in enemy poison still dies on schedule. */
+    log(`Tend: healed ${healed}`, "heal");
+    return `tend: healed ${healed}`;
+  }
+  const t = currentTarget();
+  if (!t) return "nothing to dose";
+  const got = dealDamage(t, Math.floor(t.maxHp * spec.value), true);
+  log(`Dose: ${t.name} takes ${got} poison`, "hit");
+  return `dose: ${t.name} takes ${got} poison`;
 }
 
 /* Public entry point -- wraps fireTriggerOnce with Power "swipe_multiplier":
@@ -3095,6 +3190,13 @@ async function resolveBoard() {
            free rider on whatever blue already did rather than a trade. Void
            has to be worth a colour to be worth choosing, and it cannot be
            worth a colour while it costs nothing to take. */
+        /* 2pc: every gem of the hijacked colour matched owes one teal gem,
+           one for one -- the rate the void uses, for the same reason. Owed
+           here, placed at the end of this cascade step. */
+        if (color === POISON_COLOUR && loadout.apocetharys2pc && cells.length) {
+          poisonPending += cells.length;
+          log(`${tag}: the apothecary's work -- ${cells.length} poison gem(s) owed`, "spec");
+        }
         if (color === VOID_COLOUR && loadout.voidGift2pc && cells.length) {
           voidsPending += cells.length;
           log(`${tag}: ${COLOUR_NAME[VOID_COLOUR].toLowerCase()} belongs to the void`
@@ -3114,14 +3216,11 @@ async function resolveBoard() {
         special[anchor[0]][anchor[1]] = shape;
         stats.specials++;
         log(`++ ${shape} leaves a special ${color} gem (${BLAST_DESC[shape]})`, "spec");
-        if (shape === "line4" && loadout.apocetharys2pc) {
-          const placed = placeSpecial("poison", APOCETHARYS_GEMS_PER_PROC);
-          if (placed) log(`++ Apocetharys Garb plants ${placed} dormant poison gem(s) on the board`, "spec");
-        }
-        if (shape === "line5" && loadout.apocetharys4pc) {
-          const placed = placeSpecial("poison", APOCETHARYS_GEMS_PER_PROC);
-          if (placed) log(`++ Apocetharys Garb plants ${placed} dormant poison gem(s) on the board (5chain)`, "spec");
-        }
+        /* The 4chain/5chain poison SPECIAL is no longer planted -- poison
+           comes from the hijacked colour now. The special's machinery (mark,
+           fusion cases, firePoisonGem) is left intact but unreachable rather
+           than torn out, so the old model can be restored if the token economy
+           does not play well. Delete it once logged play has settled that. */
       } else if (shape === "line3" && player.gambleNextLine3) {
         // Spell "Gambler's Gambit": the next plain 3-match doesn't just pay
         // its usual flat value -- it ALSO leaves a special gem of a random
@@ -3185,6 +3284,7 @@ async function resolveBoard() {
     // 3. REFILL.
     collapse(cells);
     placePendingVoids();
+    placePendingPoison();
     // The tutorial refills into an INERT pattern instead of random colours.
     // Random refill cascades, and a cascade turns "I made an L" into a chain of
     // unrelated matches ending in a line5 -- which is exactly what a tester
@@ -4107,6 +4207,7 @@ async function attemptSwap(r1, c1, r2, c2) {
     }
 
     placePendingVoids();   // anything a fusion's own detonation left owing
+    placePendingPoison();
     endSwipeTally();
     render(true);
 
@@ -4553,9 +4654,12 @@ function render(fresh) {
   // Recolour the hijacked socket. Done here rather than at build time because
   // the loadout can be rebuilt mid-session from the setup screen, and a stale
   // class would leave a purple gem on a build that has no void at all.
-  for (const c of COLORS)
+  for (const c of COLORS) {
     document.body.classList.toggle("void-" + c,
       c === VOID_COLOUR && !!loadout.voidGift2pc);
+    document.body.classList.toggle("pois-" + c,
+      c === POISON_COLOUR && !!loadout.apocetharys2pc);
+  }
 
   q("spells").innerHTML = availableSpells().map(n => {
     // Show what THIS cast would actually charge -- free (banked
@@ -4571,6 +4675,27 @@ function render(fresh) {
   }).join("");
   q("spells").querySelectorAll("button").forEach(b =>
     b.onclick = () => cast(b.dataset.spell));
+
+  /* The apothecary's kit sits in the same panel as the spells, because it is
+     the same kind of decision -- spend a banked resource, or hold it. It only
+     appears for a build that hijacked a colour to earn tokens. Buttons carry
+     their cost the way spell buttons do, and grey out when unaffordable, so a
+     button never offers something usePoisonAbility() would refuse. */
+  const kit = q("poisonKit");
+  if (!loadout.apocetharys2pc) {
+    kit.innerHTML = "";
+    kit.classList.add("hidden");
+  } else {
+    kit.classList.remove("hidden");
+    const held = player.poisonTokens || 0;
+    kit.innerHTML = `<div class="kithead">Apothecary — <b>${held}</b> token${held === 1 ? "" : "s"}</div>`
+      + Object.entries(POISON_ABILITIES).map(([n, a]) =>
+        `<button ${held < a.cost ? "disabled" : ""} data-pois="${n}">${a.label}`
+        + `<small>${a.cost} token${a.cost === 1 ? "" : "s"}</small><small>${a.desc}</small></button>`
+      ).join("");
+    kit.querySelectorAll("button").forEach(b =>
+      b.onclick = () => { usePoisonAbility(b.dataset.pois); render(); });
+  }
 
   q("enemies").innerHTML = enemies.map((e, i) => {
     if (!isAlive(e)) return `<div class="enemy dead"><div class="top"><span>${e.name}</span><span>dead</span></div></div>`;
@@ -4636,6 +4761,9 @@ function startEncounter() {
   targetIdx = 0;
   board = newBoard();
   special = emptySpecials();
+  // Tokens clear between fights like mana does -- the resource is a rhythm
+  // inside one fight, not a war chest you carry into a boss. Open question.
+  player.poisonTokens = 0;
   player.mana = 0;               // mana, armour and shield reset between combats
   // Poison is the one status that SURVIVES a fight. It wears off rather than
   // clearing -- resetting it here would undo the whole point of it.
@@ -5144,7 +5272,7 @@ function startTutorial() {
 
 function begin(picksArg, setKeys, tutorial) {
   loadout = buildLoadout(picksArg, setKeys);
-  player = { hp: loadout.hp, maxHp: loadout.hp, poison: 0, mana: 0, block: 0, armour: 0,
+  player = { hp: loadout.hp, maxHp: loadout.hp, poison: 0, poisonTokens: 0, mana: 0, block: 0, armour: 0,
              shield: 0, doubleNext: false, spellBuffStacks: 0, locusts: 0, wildCharges: 0,
              dmgAmpStacks: 0, etherealStacks: 0,
              doubleNextSwipe: false, nextSpellFree: false, dodgeStacks: 0, dodgeCharges: 0,
