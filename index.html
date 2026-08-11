@@ -13,7 +13,11 @@
     --text: #e6e8ee;
     --dim: #8b93a5;
     --R: #e0544e;
-    --G: #4cb377;
+    /* Leaf green rather than sea green. The old #4cb377 sat a few degrees
+       from --teal, so a poison gem on the board read as a green gem with a
+       letter on it. Colour is never load-bearing (every gem draws its effect
+       glyph) but it should not actively mislead. */
+    --G: #5aab3c;
     --Y: #dfb13a;
     --B: #4a8ede;
     --X: #7b5ea7;
@@ -297,6 +301,16 @@
   .gem.Y { background-color: var(--Y); background-image: url(graphics/yellowgem.png); }
   .gem.B { background-color: var(--B); background-image: url(graphics/bluegem.png); }
   .gem.X { background-color: var(--X); background-image: url(graphics/voidgem.png); }
+  /* A gem carrying the poison special wears teal, the same way the void wears
+     purple -- it is its own thing on the board, not somebody else's gem with a
+     letter added. There is no teal gem art yet, so the green art is recoloured
+     by blending its luminosity over the teal fill: it keeps the drawn facets
+     and takes the new hue. Swap in real art and this rule can lose the blend. */
+  .gem.poisongem {
+    background-color: var(--teal);
+    background-image: url(graphics/greengem.png);
+    background-blend-mode: luminosity;
+  }
   /* Whichever colour Void's Gift has hijacked wears the purple gem instead of
      its own. The body carries `void-<letter>` only while that set is equipped,
      so the same board renders normally for every other build. Matching it
@@ -4465,6 +4479,9 @@ function render(fresh) {
     if (swept.has(k2)) d.classList.add("swept");
     d.dataset.r = r; d.dataset.c = c;
     if (special[r][c]) {
+      // Purely visual: poison is the one special that recolours its gem, so it
+      // reads as a teal gem rather than as a green one wearing a "p".
+      if (special[r][c] === "poison") d.classList.add("poisongem");
       const s = document.createElement("span");
       s.className = "mark"; s.textContent = MARK[special[r][c]];
       d.appendChild(s);
